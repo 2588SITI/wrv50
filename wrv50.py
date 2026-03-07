@@ -165,7 +165,7 @@ def generate_excel(data):
         'Aspect': ev['Aspect'], 'Speed (km/h)': ev['Speed'], 'RTIS Stn': ev['RTIS_Stn']
     } for ev in data])
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        export_df.to_excel(writer, index=False, sheet_name='Violations')
+        export_df.to_excel(writer, index=False, sheet_name='SIGNAL ASPECTs')
     return output.getvalue()
 
 def generate_zip_graphs(data, rtis_df):
@@ -229,7 +229,7 @@ if st.session_state.processed and st.session_state.events:
     
     with col3:
         st.download_button("📥 Excel Report", data=generate_excel(filtered_events), 
-                           file_name="Speed_Violations.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                           file_name="Speed_SIGNAL ASPECTs.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with col4:
         st.download_button("🖼 Download All Graphs (ZIP)", data=generate_zip_graphs(filtered_events, st.session_state.rtis), 
                            file_name="Annotated_Graphs.zip", mime="application/zip")
@@ -240,7 +240,7 @@ if st.session_state.processed and st.session_state.events:
     c_left, c_right = st.columns([1.2, 1.5])
 
     with c_left:
-        st.write("### 📜 Violation Table")
+        st.write("### 📜 SIGNAL ASPECT Table")
         # Format for display
         display_df = pd.DataFrame(filtered_events)
         if not display_df.empty:
@@ -287,6 +287,6 @@ if st.session_state.processed and st.session_state.events:
             
             st.pyplot(fig)
 elif st.session_state.processed:
-    st.info("No safety violations found in the given dataset.")
+    st.info("No safety SIGNAL ASPECTs found in the given dataset.")
 else:
     st.info("👈 Please upload the 3 files in the sidebar and click 'PROCESS DATA'.")
