@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import base64
 import collections
 import zipfile
 import pandas as pd
@@ -9,7 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # =========================================================
-#         STREAMLIT PAGE SETUP - V45 (PREMIUM RAILWAY THEME)
+#         STREAMLIT PAGE SETUP - V46 (CUSTOM TRAIN THEME)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
@@ -23,14 +24,35 @@ BG_MAP = {
     "Red": "#F2F2F2"
 }
 
-# --- CSS Styling & Beautiful Bullet Train Header ---
+# =========================================================
+#         LOCAL IMAGE TO BACKGROUND LOGIC
+# =========================================================
+def get_base64_of_bin_file(bin_file):
+    try:
+        with open(bin_file, 'rb') as f:
+            data = f.read()
+        return base64.b64encode(data).decode()
+    except Exception:
+        return None
+
+# Yahan hum check karenge ki 'train.jpg' folder mein hai ya nahi
+img_base64 = get_base64_of_bin_file("train.jpg")
+
+if img_base64:
+    # Agar aapki train.jpg mil gayi, to background me wo lagegi
+    bg_style = f"background: url('data:image/jpeg;base64,{img_base64}') no-repeat center center;"
+else:
+    # Fallback agar image folder me nahi hai
+    bg_style = "background: url('https://images.unsplash.com/photo-1474487548417-781cb71495f3?q=80&w=2000&auto=format&fit=crop') no-repeat center center;"
+
+# --- CSS Styling & Custom Bullet Train Header ---
 st.markdown(f"""
     <style>
     /* Full Length Bullet Train Image Background */
     .train-bg {{
         width: 100%;
-        height: 250px;
-        background: url('https://images.unsplash.com/photo-1474487548417-781cb71495f3?q=80&w=2000&auto=format&fit=crop') no-repeat center center;
+        height: 300px;
+        {bg_style}
         background-size: cover;
         border-radius: 12px;
         position: relative;
@@ -42,7 +64,7 @@ st.markdown(f"""
     .text-overlay {{
         position: absolute;
         top: 0; left: 0; width: 100%; height: 100%;
-        background: linear-gradient(180deg, rgba(26,35,126,0.9) 0%, rgba(26,35,126,0.5) 45%, transparent 100%);
+        background: linear-gradient(180deg, rgba(26,35,126,0.85) 0%, rgba(26,35,126,0.4) 45%, transparent 100%);
         display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 25px;
         border-radius: 9px;
     }}
@@ -84,10 +106,10 @@ def base_station(s):
 
 def relay_type(name):
     name = str(name).upper()
-    if any(x in name for x in['DECR','DECPR_K','DECPR', 'DGCR']): return 'Green'
+    if any(x in name for x in ['DECR','DECPR_K','DECPR', 'DGCR']): return 'Green'
     if any(x in name for x in['HHECR','HHECPR2_K', 'HHGCR']): return 'Double Yellow'
-    if any(x in name for x in ['HECR', 'HGCR']): return 'Yellow'
-    if any(x in name for x in ['RECR', 'RGCR']): return 'Red'
+    if any(x in name for x in['HECR', 'HGCR']): return 'Yellow'
+    if any(x in name for x in['RECR', 'RGCR']): return 'Red'
     return None
 
 @st.cache_data(show_spinner=False)
@@ -241,11 +263,11 @@ with st.sidebar:
 
 if st.session_state.processed and st.session_state.events:
     # --- Top Control Bar ---
-    col1, col2, col3, col4 = st.columns([1.5, 2, 1.2, 1.5])
+    col1, col2, col3, col4 = st.columns([2])
     
     with col1:
         st.markdown("**🚥 Aspect Filters:**")
-        filter_opt = st.radio("Aspect:", ["All", "Yellow", "Double Yellow"], horizontal=True, label_visibility="collapsed")
+        filter_opt = st.radio("Aspect:",["All", "Yellow", "Double Yellow"], horizontal=True, label_visibility="collapsed")
     
     # Apply Filter
     filtered_events = st.session_state.events
@@ -262,7 +284,7 @@ if st.session_state.processed and st.session_state.events:
     st.divider()
 
     # --- Split Screen Layout (Table & Graph Side-by-Side) ---
-    c_table, c_graph = st.columns([1.2, 1.8])
+    c_table, c_graph = st.columns([1.8])
 
     with c_table:
         st.markdown("### 🚦 SIGNAL ASPECT")
@@ -276,11 +298,11 @@ if st.session_state.processed and st.session_state.events:
             # Interactive Streamlit Dataframe (Arrow Keys Work Here!)
             selected_row = st.dataframe(
                 display_df[display_cols],
-                on_select="rerun",           # Triggers rerun on click/arrow keys
-                selection_mode="single-row", # Single row selection allowed
+                on_select="rerun",           
+                selection_mode="single-row", 
                 hide_index=True,
                 use_container_width=True,
-                height=550                   # Fixed height so scroll bar appears
+                height=550                   
             )
         else:
             st.info("No events match the selected filter.")
@@ -288,7 +310,6 @@ if st.session_state.processed and st.session_state.events:
     with c_graph:
         st.markdown("### 🛤️ Precision Speed Profile")
         if not display_df.empty:
-            # Check which row is selected, default to 0
             if len(selected_row.selection.rows) > 0:
                 idx = selected_row.selection.rows[0]
             else:
@@ -298,7 +319,7 @@ if st.session_state.processed and st.session_state.events:
             rtis_df = st.session_state.rtis
             sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1000) & (rtis_df['CumDist'] <= ev['CumDist'] + 1000)]
             
-            fig, ax = plt.subplots(figsize=(10, 6.5)) # Adjusted aspect ratio
+            fig, ax = plt.subplots(figsize=(10, 6.5))
             ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
             
             # Plot Speed Line
@@ -327,7 +348,6 @@ if st.session_state.processed and st.session_state.events:
             ax.grid(True, which='minor', linestyle=':', alpha=0.2)
             ax.minorticks_on()
             
-            # Remove top and right borders for a cleaner look
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             
