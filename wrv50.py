@@ -15,7 +15,7 @@ import matplotlib.dates as mdates
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
 # --- Constants & Colors ---
-SAFFRON = "#D80F0F"
+SAFFRON = "#33D4FC"
 NAVY = "#1A237E"
 BG_MAP = {
     "Green": "#0D860D",
@@ -30,7 +30,7 @@ st.markdown(f"""
     .top-header {{ background-color: {SAFFRON}; padding: 15px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px; }}
     </style>
     <div class="top-header">
-        <h1 style='margin:0;'>🚄 Loco-Speed Safety Audit (High Precision)</h1>
+        <h1 style='margin:0;'>🚄 Loco-Speed Safety Audit </h1>
     </div>
 """, unsafe_allow_html=True)
 
@@ -74,7 +74,7 @@ def load_file(file_name, file_bytes):
 #                     CORE PROCESSING
 # =========================================================
 def process_data(rtis_up, dlog_up, sig_up):
-    with st.spinner("⏳ Processing Data (High-Speed Mode)... Please Wait."):
+    with st.spinner("⏳ Processing Data (SIGNAL ASPECT-Speed Mode)... Please Wait."):
         try:
             # 1. Load Signals
             sig_map = load_file(sig_up.name, sig_up.getvalue())
