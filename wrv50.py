@@ -145,11 +145,11 @@ def process_files(rtis_file, dlog_file, sig_file):
         except Exception as e:
             st.error(f"Processing Error: {e}")
 
-# --- Header Section ---
+# --- Header Section (Name Removed) ---
 st.markdown(f"""
     <div style='text-align: center; background-color: {NAVY}; padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
         <h1 style='color: white; margin-bottom: 0;'>Loco-Speed Safety Audit Tool</h1>
-        <p style='color: {SAFFRON}; font-weight: bold; font-size: 18px; margin-top: 5px;'>Western Railway | Rajesh Singh</p>
+        <p style='color: {SAFFRON}; font-weight: bold; font-size: 18px; margin-top: 5px;'>Western Railway | ADEE TRO BL</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -211,7 +211,7 @@ if st.session_state.events:
     csv_report = df.to_csv(index=False).encode('utf-8')
     st.download_button("📄 Download Excel Report", data=csv_report, file_name="Safety_Audit.csv", mime="text/csv")
 
-# --- Footer Section ---
+# --- Footer Section (Name Removed) ---
 st.markdown("---")
 st.markdown(f"""
     <div style='text-align: center; color: grey; padding: 10px;'>
