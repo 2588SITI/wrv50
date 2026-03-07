@@ -29,7 +29,6 @@ if 'rtis' not in st.session_state:
 
 # --- Intelligence: Auto-Column Finder ---
 def get_best_column(actual_cols, target_keywords):
-    """Finds the correct column even if names are slightly different"""
     for col in actual_cols:
         col_clean = str(col).upper().replace(" ", "").replace("_", "")
         if any(key in col_clean for key in target_keywords):
@@ -37,7 +36,6 @@ def get_best_column(actual_cols, target_keywords):
     return None
 
 def load_data_smart(file, is_dlog=False):
-    """Fast loading with Auto-Column Detection for Railway Files"""
     try:
         if file.name.endswith(('.xlsx', '.xls')):
             df_preview = pd.read_excel(file, nrows=0)
@@ -147,11 +145,11 @@ def process_files(rtis_file, dlog_file, sig_file):
         except Exception as e:
             st.error(f"Processing Error: {e}")
 
-# --- Header Section (FIXED LINE 123) ---
+# --- Header Section ---
 st.markdown(f"""
     <div style='text-align: center; background-color: {NAVY}; padding: 15px; border-radius: 10px; margin-bottom: 20px;'>
         <h1 style='color: white; margin-bottom: 0;'>Loco-Speed Safety Audit Tool</h1>
-        <p style='color: {SAFFRON}; font-weight: bold; font-size: 18px; margin-top: 5px;'>Western Railway | Rajesh Singh, ADEE TRO BL</p>
+        <p style='color: {SAFFRON}; font-weight: bold; font-size: 18px; margin-top: 5px;'>Western Railway | Rajesh Singh</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -212,3 +210,12 @@ if st.session_state.events:
     st.subheader("📥 Audit Export")
     csv_report = df.to_csv(index=False).encode('utf-8')
     st.download_button("📄 Download Excel Report", data=csv_report, file_name="Safety_Audit.csv", mime="text/csv")
+
+# --- Footer Section ---
+st.markdown("---")
+st.markdown(f"""
+    <div style='text-align: center; color: grey; padding: 10px;'>
+        <p style='margin:0; font-size: 14px;'><b>ADEE TRO BL</b></p>
+        <p style='margin:0; font-size: 12px;'>Indian Railways | Operational Safety Audit Tool</p>
+    </div>
+""", unsafe_allow_html=True)
