@@ -12,15 +12,15 @@ import matplotlib.dates as mdates
 # =========================================================
 #         STREAMLIT PAGE SETUP - V44.6 (PRECISE)
 # =========================================================
-st.set_page_config(page_title="WR Speed Analyzer V44.6", layout="wide", page_icon="🚄")
+st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
 # --- Constants & Colors ---
-SAFFRON = "#FF9933"
+SAFFRON = "#D80F0F"
 NAVY = "#1A237E"
 BG_MAP = {
-    "Green": "#E6FFFA",
-    "Yellow": "#FFFFE0",
-    "Double Yellow": "#FFF5E6",
+    "Green": "#0D860D",
+    "Yellow": "#EEF153",
+    "Double Yellow": "#EFA627",
     "Red": "#F2F2F2"
 }
 
