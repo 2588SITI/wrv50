@@ -9,72 +9,62 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # =========================================================
-#         STREAMLIT PAGE SETUP - V44.8 (PREMIUM UI)
+#         STREAMLIT PAGE SETUP - V44.9 (FIXED HEADER)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
 # --- Constants & Colors ---
 SAFFRON = "#FF9933"
 NAVY = "#1A237E"
-BG_MAP = {
-    "Green": "#E6FFFA",
-    "Yellow": "#FFFFE0",
-    "Double Yellow": "#FFF5E6",
-    "Red": "#F2F2F2"
-}
+BG_MAP = {"Green": "#E6FFFA", "Yellow": "#FFFFE0", "Double Yellow": "#FFF5E6", "Red": "#F2F2F2"}
 
-# --- Premium Bullet Train Header ---
-st.markdown("""
+# --- Premium Header with Bullet Train & Gradient Fallback ---
+st.markdown(f"""
     <style>
-    .train-container {
+    .train-container {{
         width: 100%;
-        height: 300px;
-        background: url('https://images.unsplash.com/photo-1532105956690-da2bc44b825d?q=80&w=1600&auto=format&fit=crop') no-repeat center center;
+        height: 250px;
+        /* Gradient fallback if image fails */
+        background: linear-gradient(90deg, #1A237E 0%, #FF9933 100%), 
+                    url('https://images.pexels.com/photos/72594/japan-train-railway-shinkansen-72594.jpeg?auto=compress&cs=tinysrgb&w=1600');
+        background-blend-mode: overlay;
+        background-repeat: no-repeat;
+        background-position: center;
         background-size: cover;
         border-radius: 15px;
         position: relative;
         margin-bottom: 25px;
-        box-shadow: 0 8px 16px rgba(0,0,0,0.4);
+        box-shadow: 0 10px 20px rgba(0,0,0,0.3);
         display: flex;
         align-items: center;
         justify-content: center;
-        overflow: hidden;
-    }
-    .overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.4); /* Subtle darkening to make text pop */
-    }
-    .header-content {
-        position: relative;
+    }}
+    .header-text-box {{
+        background: rgba(0, 0, 0, 0.5);
+        padding: 20px 40px;
+        border-radius: 10px;
         text-align: center;
-        z-index: 10;
-    }
-    .main-title {
+        border: 2px solid #FF9933;
+    }}
+    .main-title {{
         color: #FFFFFF;
-        font-size: 50px;
+        font-size: 45px;
         font-weight: 900;
         text-transform: uppercase;
-        letter-spacing: 3px;
-        margin-bottom: 0px;
-        text-shadow: 3px 3px 6px rgba(0,0,0,0.9);
-    }
-    .sub-designation {
+        margin: 0;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    }}
+    .sub-designation {{
         color: #FF9933;
-        font-size: 28px;
+        font-size: 24px;
         font-weight: bold;
-        letter-spacing: 5px;
-        margin-top: -5px;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.9);
-    }
+        letter-spacing: 4px;
+        margin-top: 5px;
+    }}
     </style>
     
     <div class="train-container">
-        <div class="overlay"></div>
-        <div class="header-content">
+        <div class="header-text-box">
             <div class="main-title">Loco-Speed Safety Audit Tool</div>
             <div class="sub-designation">ADEE TRO BL</div>
         </div>
@@ -87,7 +77,7 @@ if 'rtis' not in st.session_state: st.session_state.rtis = None
 if 'processed' not in st.session_state: st.session_state.processed = False
 if 'graph_idx' not in st.session_state: st.session_state.graph_idx = 0
 
-# --- Helper Functions ---
+# --- Helper Functions (Same Logic) ---
 def clean_id(s):
     m = re.search(r'([AS])?-?(\d+)', str(s).upper())
     return f"{m.group(1) or 'S'}{m.group(2)}" if m else None
@@ -103,22 +93,19 @@ def relay_type(name):
     if any(x in name for x in ['RECR', 'RGCR']): return 'Red'
     return None
 
-@st.cache_data(show_spinner=False)
-def load_file(file_name, file_bytes):
-    file_obj = io.BytesIO(file_bytes)
-    if file_name.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(file_obj, engine='openpyxl')
-    else:
-        return pd.read_csv(file_obj, encoding='latin1', on_bad_lines='skip', low_memory=False)
+def load_file_smart(file):
+    if file.name.endswith(('.xlsx', '.xls')):
+        return pd.read_excel(file, engine='openpyxl')
+    return pd.read_csv(file, encoding='latin1', on_bad_lines='skip', low_memory=False)
 
 # --- Core Processing ---
 def process_data(rtis_up, dlog_up, sig_up):
-    with st.spinner("⚡ Synchronizing Datalogger with RTIS..."):
+    with st.spinner("⚡ Correlating RTIS & Datalogger..."):
         try:
-            sig_map = load_file(sig_up.name, sig_up.getvalue())
+            sig_map = load_file_smart(sig_up)
             up_signals = {clean_id(s) for s in sig_map.iloc[:, 6].dropna().astype(str) if clean_id(s)}
 
-            rtis = load_file(rtis_up.name, rtis_up.getvalue())
+            rtis = load_file_smart(rtis_up)
             rtis.columns = rtis.columns.str.strip()
             rtis['Logging Time'] = pd.to_datetime(rtis['Logging Time'], format='mixed', errors='coerce')
             rtis = rtis.dropna(subset=['Logging Time']).sort_values('Logging Time')
@@ -126,16 +113,13 @@ def process_data(rtis_up, dlog_up, sig_up):
             rtis['BASE_STN'] = rtis['STATION NAME'].astype(str).apply(base_station)
             st.session_state.rtis = rtis
 
-            dlog = load_file(dlog_up.name, dlog_up.getvalue())
+            dlog = load_file_smart(dlog_up)
             dlog.columns = dlog.columns.str.strip()
             dlog = dlog.rename(columns={'STATION NAME': 'STN', 'SIGNAL NAME': 'SIG', 'SIGNAL STATUS': 'STS', 'SIGNAL TIME': 'TIME'})
-            
             dlog['dt'] = pd.to_datetime(dlog['TIME'].astype(str).str.replace(r':(\d{3})$', r'.\1', regex=True), format='mixed', errors='coerce')
             dlog = dlog.dropna(subset=['dt']).sort_values('dt')
 
-            latch_aspect = collections.defaultdict(lambda: "Red")
-            last_down_event = {}
-            raw_events = []
+            latch_aspect, last_down_event, raw_events = collections.defaultdict(lambda: "Red"), {}, []
 
             for row in dlog.itertuples():
                 stn = base_station(row.STN)
@@ -165,55 +149,49 @@ def process_data(rtis_up, dlog_up, sig_up):
 
             st.session_state.events = sorted(raw_events, key=lambda x: x['Time'])
             st.session_state.processed = True
-            st.success("✅ Analysis Complete.")
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
 
-# --- UI Layout ---
+# --- UI Sidebar ---
 with st.sidebar:
-    st.header("📂 1. Import Data")
+    st.header("📂 Data Import")
     rt_f = st.file_uploader("RTIS", type=['csv', 'xlsx'])
     dl_f = st.file_uploader("Datalogger", type=['csv', 'xlsx'])
     sg_f = st.file_uploader("Mapping", type=['csv', 'xlsx'])
     if st.button("🚀 RUN AUDIT", use_container_width=True, type="primary"):
         if rt_f and dl_f and sg_f: process_data(rt_f, dl_f, sg_f)
 
+# --- Display Logic ---
 if st.session_state.processed and st.session_state.events:
-    col_a, col_b = st.columns([2, 1])
-    with col_b:
-        st.write("### 📥 Export Options")
-        exp_df = pd.DataFrame(st.session_state.events)
-        st.download_button("📊 Download Report (CSV)", data=exp_df.to_csv(index=False).encode('utf-8'), file_name="Safety_Audit.csv", use_container_width=True)
-
-    st.write("### 📜 Audit Log")
-    st.dataframe(exp_df[['Stn', 'Sig', 'Time', 'Aspect', 'Speed', 'RTIS_Stn']], use_container_width=True, hide_index=True)
+    st.write("### 📜 Safety Violation Records")
+    df_show = pd.DataFrame(st.session_state.events)
+    st.dataframe(df_show[['Stn', 'Sig', 'Time', 'Aspect', 'Speed', 'RTIS_Stn']], use_container_width=True, hide_index=True)
 
     st.divider()
-    st.write("### 📈 Visual Safety Analysis")
     
-    # Navigation
-    nav1, nav2, nav3 = st.columns([1, 2, 1])
-    with nav1:
-        if st.button("◀ Previous", use_container_width=True): st.session_state.graph_idx -= 1
-    with nav3:
-        if st.button("Next ▶", use_container_width=True): st.session_state.graph_idx += 1
+    # Navigation Buttons for Graphs
+    n1, n2, n3 = st.columns([1, 2, 1])
+    with n1:
+        if st.button("◀ Previous Graph", use_container_width=True): st.session_state.graph_idx -= 1
+    with n3:
+        if st.button("Next Graph ▶", use_container_width=True): st.session_state.graph_idx += 1
     
     st.session_state.graph_idx %= len(st.session_state.events)
     ev = st.session_state.events[st.session_state.graph_idx]
     
-    with nav2:
-        st.markdown(f"<h4 style='text-align:center;'>Graph {st.session_state.graph_idx + 1} of {len(st.session_state.events)}</h4>", unsafe_allow_html=True)
+    with n2:
+        st.markdown(f"<h4 style='text-align:center;'>Audit {st.session_state.graph_idx + 1} of {len(st.session_state.events)}</h4>", unsafe_allow_html=True)
 
     # Plot
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(12, 5))
     rt = st.session_state.rtis
     sub = rt[(rt['CumDist'] >= ev['CumDist'] - 1000) & (rt['CumDist'] <= ev['CumDist'] + 1000)]
     ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFF"))
     ax.plot(sub['Logging Time'], sub['Speed'], color=NAVY, lw=2.5)
     ax.axvline(x=ev['Time'], color='red', ls='--')
-    ax.annotate(f"SPEED: {ev['Speed']} km/h\nSIGNAL: {ev['Sig']}", xy=(ev['Time'], ev['Speed']), xytext=(20, 20), textcoords='offset points', bbox=dict(boxstyle="round", fc="white", ec="red"), arrowprops=dict(arrowstyle="->", color="red"))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+    ax.set_title(f"Violation: {ev['Stn']} Signal {ev['Sig']} at {ev['Time'].strftime('%H:%M:%S')}", fontweight='bold')
     st.pyplot(fig)
 
 elif not st.session_state.processed:
-    st.info("👈 Please upload files and click 'RUN AUDIT' to begin.")
+    st.info("👈 Please upload files in the sidebar and click 'RUN AUDIT'.")
