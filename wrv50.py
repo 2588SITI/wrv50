@@ -241,8 +241,9 @@ if st.session_state.events:
 st.markdown("---")
 footer_html = f"""
 <div style='text-align: center; color: grey; font-size: 12px;'>
-    <p>Developed by <b>RAJESH Singh</b>, ADEE TRO BL</p>
+    <p>Developed by <b>RAJESH SINGH</b>, ADEE TRO BL</p>
 </div>
 """
 st.markdown(footer_html, unsafe_allow_html=True)
+
 
