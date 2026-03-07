@@ -119,7 +119,7 @@ def process_files(rtis_file, dlog_file, sig_file):
         st.error(f"Error during processing: {e}")
 
 # --- User Interface ---
-st.markdown(f"<h1 style='text-align: center; color: {SAFFRON};'>WR YY & Y Speed Analyzer - V44.6</h1>", unsafe_allow_html=True)
+st.markdown(f"<h1 style='text-align: center; color: {SAFFRON};'>Loco-Speed Safety Audit Tool - V44.6</h1>", unsafe_allow_html=True)
 
 # Sidebar for Inputs
 with st.sidebar:
@@ -237,3 +237,12 @@ if st.session_state.events:
                     mime="application/zip",
                     use_container_width=True
                 )
+                # --- Footer / Watermark ---
+st.markdown("---")
+footer_html = f"""
+<div style='text-align: center; color: grey; font-size: 12px;'>
+    <p>Developed by <b>RAJESH Singh</b>, ADEE TRO BL</p>
+    <p>Indian Railways | Speed Analysis & Safety Audit Tool</p>
+</div>
+"""
+st.markdown(footer_html, unsafe_allow_html=True)
