@@ -235,11 +235,3 @@ if st.session_state.events:
             st.download_button("✅ Download ZIP Archive", data=zip_buffer.getvalue(), 
                                file_name="Loco_Speed_Graphs.zip", mime="application/zip", use_container_width=True)
 
-# --- Watermark / Footer ---
-st.markdown("---")
-st.markdown(f"""
-    <div style='text-align: center; color: grey; font-family: sans-serif;'>
-        <p style='margin:0;'><b>Developed by Rajesh Singh, ADEE TRO BL</b></p>
-        <p style='margin:0; font-size: 13px;'>Indian Railways | Operational Safety & Loco Analytics Tool</p>
-    </div>
-""", unsafe_allow_html=True)
