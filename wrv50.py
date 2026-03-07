@@ -1,7 +1,6 @@
 import os
 import re
 import io
-import base64
 import collections
 import zipfile
 import pandas as pd
@@ -10,13 +9,13 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # =========================================================
-#         STREAMLIT PAGE SETUP - V46 (CUSTOM TRAIN THEME)
+#         STREAMLIT PAGE SETUP - V44.7 (PREMIUM UI)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
 # --- Constants & Colors ---
+SAFFRON = "#FF9933"
 NAVY = "#1A237E"
-GOLD = "#FFD700"
 BG_MAP = {
     "Green": "#E6FFFA",
     "Yellow": "#FFFFE0",
@@ -24,67 +23,55 @@ BG_MAP = {
     "Red": "#F2F2F2"
 }
 
-# =========================================================
-#         LOCAL IMAGE TO BACKGROUND LOGIC
-# =========================================================
-def get_base64_of_bin_file(bin_file):
-    try:
-        with open(bin_file, 'rb') as f:
-            data = f.read()
-        return base64.b64encode(data).decode()
-    except Exception:
-        return None
-
-# Yahan hum check karenge ki 'train.jpg' folder mein hai ya nahi
-img_base64 = get_base64_of_bin_file("train.jpg")
-
-if img_base64:
-    # Agar aapki train.jpg mil gayi, to background me wo lagegi
-    bg_style = f"background: url('data:image/jpeg;base64,{img_base64}') no-repeat center center;"
-else:
-    # Fallback agar image folder me nahi hai
-    bg_style = "background: url('https://images.unsplash.com/photo-1474487548417-781cb71495f3?q=80&w=2000&auto=format&fit=crop') no-repeat center center;"
-
-# --- CSS Styling & Custom Bullet Train Header ---
-st.markdown(f"""
+# --- CSS Styling & Bullet Train Header ---
+st.markdown("""
     <style>
     /* Full Length Bullet Train Image Background */
-    .train-bg {{
+    .train-bg {
         width: 100%;
-        height: 300px;
-        {bg_style}
+        height: 280px;
+        background: url('https://images.unsplash.com/photo-1474487548417-781cb71495f3?q=80&w=2000&auto=format&fit=crop') no-repeat center center;
         background-size: cover;
         border-radius: 12px;
         position: relative;
-        margin-bottom: 25px;
-        box-shadow: 0 8px 20px rgba(0,0,0,0.5);
-        border: 3px solid {NAVY};
-    }}
+        margin-bottom: 30px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    }
     /* Dark Gradient Overlay for the Upper Space */
-    .text-overlay {{
+    .text-overlay {
         position: absolute;
-        top: 0; left: 0; width: 100%; height: 100%;
-        background: linear-gradient(180deg, rgba(26,35,126,0.85) 0%, rgba(26,35,126,0.4) 45%, transparent 100%);
-        display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 25px;
-        border-radius: 9px;
-    }}
-    .title-text {{ 
-        color: {GOLD}; font-size: 46px; font-weight: 900; margin: 0; 
-        text-transform: uppercase; letter-spacing: 3px; 
-        text-shadow: 3px 3px 6px rgba(0,0,0,0.9); font-family: 'Arial Black', sans-serif;
-    }}
-    .subtitle-text {{ 
-        color: #FFFFFF; font-size: 20px; font-weight: bold; margin-top: 5px; 
-        letter-spacing: 6px; text-shadow: 2px 2px 4px rgba(0,0,0,0.9);
-    }}
-    /* Adjusting container widths */
-    .stDataFrame {{ border: 2px solid #ddd; border-radius: 8px; }}
+        top: 0;
+        left: 0;
+        width: 100%;
+        background: linear-gradient(180deg, rgba(0,0,15,0.9) 0%, rgba(0,0,15,0.6) 40%, transparent 100%);
+        padding: 25px 0 40px 0;
+        text-align: center;
+        border-top-left-radius: 12px;
+        border-top-right-radius: 12px;
+    }
+    .title-text { 
+        color: #FF9933; 
+        font-size: 42px; 
+        font-weight: 900; 
+        margin: 0; 
+        text-transform: uppercase; 
+        letter-spacing: 2px;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+    }
+    .subtitle-text { 
+        color: #FFFFFF; 
+        font-size: 24px; 
+        font-weight: bold; 
+        margin: 5px 0 0 0; 
+        letter-spacing: 4px;
+        text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+    }
     </style>
     
     <div class="train-bg">
         <div class="text-overlay">
             <div class="title-text">Loco-Speed Safety Audit Tool</div>
-            <div class="subtitle-text">🛤️ INDIAN RAILWAYS DASHBOARD 🚦</div>
+            <div class="subtitle-text">ADEE TRO BL</div>
         </div>
     </div>
 """, unsafe_allow_html=True)
@@ -93,6 +80,8 @@ st.markdown(f"""
 if 'events' not in st.session_state: st.session_state.events =[]
 if 'rtis' not in st.session_state: st.session_state.rtis = None
 if 'processed' not in st.session_state: st.session_state.processed = False
+if 'graph_idx' not in st.session_state: st.session_state.graph_idx = 0
+if 'last_filter' not in st.session_state: st.session_state.last_filter = "All"
 
 # =========================================================
 #                     HELPER FUNCTIONS
@@ -106,10 +95,10 @@ def base_station(s):
 
 def relay_type(name):
     name = str(name).upper()
-    if any(x in name for x in ['DECR','DECPR_K','DECPR', 'DGCR']): return 'Green'
+    if any(x in name for x in['DECR','DECPR_K','DECPR', 'DGCR']): return 'Green'
     if any(x in name for x in['HHECR','HHECPR2_K', 'HHGCR']): return 'Double Yellow'
-    if any(x in name for x in['HECR', 'HGCR']): return 'Yellow'
-    if any(x in name for x in['RECR', 'RGCR']): return 'Red'
+    if any(x in name for x in ['HECR', 'HGCR']): return 'Yellow'
+    if any(x in name for x in ['RECR', 'RGCR']): return 'Red'
     return None
 
 @st.cache_data(show_spinner=False)
@@ -128,7 +117,7 @@ def load_file(file_name, file_bytes):
 #                     CORE PROCESSING
 # =========================================================
 def process_data(rtis_up, dlog_up, sig_up):
-    with st.spinner("⏳ Analyzing Data (High-Speed Engine)... Please Wait."):
+    with st.spinner("⏳ Processing Data (High-Speed Mode)... Please Wait."):
         try:
             sig_map = load_file(sig_up.name, sig_up.getvalue())
             up_signals = {clean_id(s) for s in sig_map.iloc[:, 6].dropna().astype(str) if clean_id(s)}
@@ -197,7 +186,8 @@ def process_data(rtis_up, dlog_up, sig_up):
 
             st.session_state.events = sorted(final_events, key=lambda x: x['Time'])
             st.session_state.processed = True
-            st.success(f"✅ Processing Complete! Found {len(st.session_state.events)} aspect events.")
+            st.session_state.graph_idx = 0  # Reset index on new process
+            st.success(f"✅ Processed successfully! Found {len(st.session_state.events)} events.")
         except Exception as e:
             st.error(f"❌ Error during processing: {str(e)}")
 
@@ -209,10 +199,10 @@ def generate_excel(data):
     export_df = pd.DataFrame([{
         'Station': ev['Stn'], 'Signal': ev['Sig'], 
         'RECR Up Time (ms)': ev['Time'].strftime('%d/%m/%Y %H:%M:%S.%f')[:-3],
-        'Aspect Before Red': ev['Aspect'], 'Speed (km/h)': ev['Speed'], 'RTIS Stn': ev['RTIS_Stn']
+        'Aspect': ev['Aspect'], 'Speed (km/h)': ev['Speed'], 'RTIS Stn': ev['RTIS_Stn']
     } for ev in data])
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        export_df.to_excel(writer, index=False, sheet_name='Signal Aspects')
+        export_df.to_excel(writer, index=False, sheet_name='Violations')
     return output.getvalue()
 
 def generate_zip_graphs(data, rtis_df):
@@ -223,7 +213,7 @@ def generate_zip_graphs(data, rtis_df):
             sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1000) & (rtis_df['CumDist'] <= ev['CumDist'] + 1000)]
             
             ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
-            ax.plot(sub['Logging Time'], sub['Speed'], color=NAVY, lw=2.5)
+            ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E', lw=2.5)
             ax.axvline(x=ev['Time'], color='red', linestyle='--', linewidth=2)
             
             time_ms = ev['Time'].strftime('%H:%M:%S.%f')[:-3]
@@ -250,7 +240,7 @@ def generate_zip_graphs(data, rtis_df):
 #                       UI LAYOUT
 # =========================================================
 with st.sidebar:
-    st.header("📁 1. Load Data Files")
+    st.header("📁 1. Load Files")
     rtis_f = st.file_uploader("RTIS File", type=['csv', 'xlsx'])
     dlog_f = st.file_uploader("Datalogger File", type=['csv', 'xlsx'])
     sig_f = st.file_uploader("Signal Mapping File", type=['csv', 'xlsx'])
@@ -263,11 +253,16 @@ with st.sidebar:
 
 if st.session_state.processed and st.session_state.events:
     # --- Top Control Bar ---
-    col1, col2, col3, col4 = st.columns([2])
+    col1, col2, col3, col4 = st.columns([1.5, 2, 1, 1.5])
     
     with col1:
-        st.markdown("**🚥 Aspect Filters:**")
-        filter_opt = st.radio("Aspect:",["All", "Yellow", "Double Yellow"], horizontal=True, label_visibility="collapsed")
+        st.markdown("**Filters:**")
+        filter_opt = st.radio("Aspect:", ["All", "Yellow", "Double Yellow"], horizontal=True, label_visibility="collapsed")
+        
+        # Reset graph index if filter changes
+        if st.session_state.last_filter != filter_opt:
+            st.session_state.graph_idx = 0
+            st.session_state.last_filter = filter_opt
     
     # Apply Filter
     filtered_events = st.session_state.events
@@ -276,84 +271,72 @@ if st.session_state.processed and st.session_state.events:
     
     with col3:
         st.download_button("📥 Excel Report", data=generate_excel(filtered_events), 
-                           file_name="Signal_Aspects_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                           file_name="Speed_Violations.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with col4:
         st.download_button("🖼 Download All Graphs (ZIP)", data=generate_zip_graphs(filtered_events, st.session_state.rtis), 
                            file_name="Annotated_Graphs.zip", mime="application/zip")
 
     st.divider()
 
-    # --- Split Screen Layout (Table & Graph Side-by-Side) ---
-    c_table, c_graph = st.columns([1.8])
-
-    with c_table:
-        st.markdown("### 🚦 SIGNAL ASPECT")
-        st.caption("🖱️ **Tip:** Click any row below, then press **Up (🔼) / Down (🔽) arrow keys** to change graphs instantly!")
+    # --- Main Display ---
+    st.write("### 📜 Violation Log (Read Only)")
+    
+    display_df = pd.DataFrame(filtered_events)
+    if not display_df.empty:
+        display_df['Time (ms)'] = display_df['Time'].dt.strftime('%H:%M:%S.%f').str[:-3]
+        display_cols =['Stn', 'Sig', 'Time (ms)', 'Aspect', 'Speed', 'RTIS_Stn']
         
-        display_df = pd.DataFrame(filtered_events)
-        if not display_df.empty:
-            display_df['Time (ms)'] = display_df['Time'].dt.strftime('%H:%M:%S.%f').str[:-3]
-            display_cols =['Stn', 'Sig', 'Time (ms)', 'Aspect', 'Speed', 'RTIS_Stn']
-            
-            # Interactive Streamlit Dataframe (Arrow Keys Work Here!)
-            selected_row = st.dataframe(
-                display_df[display_cols],
-                on_select="rerun",           
-                selection_mode="single-row", 
-                hide_index=True,
-                use_container_width=True,
-                height=550                   
-            )
-        else:
-            st.info("No events match the selected filter.")
+        # Standard Dataframe (No click/select required anymore)
+        st.dataframe(display_df[display_cols], hide_index=True, use_container_width=True, height=200)
 
-    with c_graph:
-        st.markdown("### 🛤️ Precision Speed Profile")
-        if not display_df.empty:
-            if len(selected_row.selection.rows) > 0:
-                idx = selected_row.selection.rows[0]
-            else:
-                idx = 0
-                
-            ev = filtered_events[idx]
-            rtis_df = st.session_state.rtis
-            sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1000) & (rtis_df['CumDist'] <= ev['CumDist'] + 1000)]
-            
-            fig, ax = plt.subplots(figsize=(10, 6.5))
-            ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
-            
-            # Plot Speed Line
-            ax.plot(sub['Logging Time'], sub['Speed'], color=NAVY, lw=3)
-            
-            # Plot Red Vertical Line
-            ax.axvline(x=ev['Time'], color='red', linestyle='--', linewidth=2.5)
-            
-            # Annotation Box
-            time_ms = ev['Time'].strftime('%H:%M:%S.%f')[:-3]
-            box_text = f"STN: {ev['Stn']}\nSIG: {ev['Sig']}\nTIME: {time_ms}\nSPEED: {ev['Speed']} km/h"
-            
-            ax.annotate(box_text, xy=(ev['Time'], ev['Speed']), xytext=(20, 20), textcoords='offset points',
-                        bbox=dict(boxstyle="round,pad=0.6", fc="white", ec="red", lw=2, alpha=0.9),
-                        arrowprops=dict(arrowstyle="-|>", connectionstyle="arc3,rad=0.3", color="red", lw=1.5),
-                        fontweight='bold', fontsize=11)
+        st.divider()
 
-            # Beautify Graph
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-            ax.set_title(f"Detailed Analysis: {ev['Stn']} | Signal: {ev['Sig']} | {ev['Aspect']} -> RED", fontweight='bold', fontsize=14, color=NAVY)
-            ax.set_ylabel("Speed (km/h)", fontweight='bold', fontsize=12)
-            ax.set_xlabel("Time", fontweight='bold', fontsize=12)
-            
-            # Grid styling
-            ax.grid(True, which='major', linestyle='-', alpha=0.4)
-            ax.grid(True, which='minor', linestyle=':', alpha=0.2)
-            ax.minorticks_on()
-            
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            
-            st.pyplot(fig)
+        # --- Graph Viewer Section (Page Up / Down Logic) ---
+        st.write("### 📈 Precision Graph Analysis")
+        
+        total_graphs = len(filtered_events)
+        
+        # Navigation Buttons
+        nav_col1, nav_col2, nav_col3 = st.columns([1, 2, 1])
+        with nav_col1:
+            if st.button("🔼 Previous Graph", use_container_width=True):
+                st.session_state.graph_idx = (st.session_state.graph_idx - 1) % total_graphs
+        with nav_col2:
+            st.markdown(f"<h4 style='text-align:center; color:{NAVY};'>Showing Graph: {st.session_state.graph_idx + 1} of {total_graphs}</h4>", unsafe_allow_html=True)
+        with nav_col3:
+            if st.button("🔽 Next Graph", use_container_width=True):
+                st.session_state.graph_idx = (st.session_state.graph_idx + 1) % total_graphs
+
+        # Generate the graph for current index
+        idx = st.session_state.graph_idx
+        ev = filtered_events[idx]
+        rtis_df = st.session_state.rtis
+        sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1000) & (rtis_df['CumDist'] <= ev['CumDist'] + 1000)]
+        
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
+        ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E', lw=2.5)
+        ax.axvline(x=ev['Time'], color='red', linestyle='--', linewidth=2)
+        
+        time_ms = ev['Time'].strftime('%H:%M:%S.%f')[:-3]
+        box_text = f"STN: {ev['Stn']}\nSIG: {ev['Sig']}\nTIME: {time_ms}\nSPEED: {ev['Speed']} km/h"
+        
+        ax.annotate(box_text, xy=(ev['Time'], ev['Speed']), xytext=(20, 20), textcoords='offset points',
+                    bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="red", lw=2, alpha=0.9),
+                    arrowprops=dict(arrowstyle="-|>", connectionstyle="arc3,rad=0.3", color="red"),
+                    fontweight='bold', fontsize=10)
+
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+        ax.set_title(f"DETAILED ANALYSIS: {ev['Stn']} | {ev['Sig']} | {ev['Aspect']} -> RED", fontweight='bold', fontsize=14)
+        ax.set_ylabel("Speed (km/h)", fontweight='bold')
+        ax.grid(True, alpha=0.4)
+        
+        st.pyplot(fig)
+
+    else:
+        st.info("No events match the selected filter.")
 
 elif st.session_state.processed:
     st.info("No safety violations found in the given dataset.")
 else:
-    st.info("👈 Please upload the 3 data files in the sidebar and click 'PROCESS DATA'.")
+    st.info("👈 Please upload the 3 files in the sidebar and click 'PROCESS DATA'.")
