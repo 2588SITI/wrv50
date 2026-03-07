@@ -5,12 +5,13 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import zipfile
 from io import BytesIO
 
-# --- Page Config ---
+# --- Page Configuration ---
 st.set_page_config(page_title="Railway Dashboard V44.6", layout="wide")
 
-# --- Styling & Constants ---
+# --- Constants & Styling ---
 SAFFRON = "#FF9933"
 BG_MAP = {
     "Green": "#E6FFFA",
@@ -20,6 +21,7 @@ BG_MAP = {
 }
 
 # --- Session State Initialization ---
+# This keeps data in memory when you click buttons
 if 'events' not in st.session_state:
     st.session_state.events = []
 if 'rtis' not in st.session_state:
@@ -46,7 +48,7 @@ def load_data(file):
         return pd.read_excel(file, engine='openpyxl')
     return pd.read_csv(file, encoding='latin1', on_bad_lines='skip', low_memory=False)
 
-# --- Core Logic ---
+# --- Core Processing Logic ---
 def process_files(rtis_file, dlog_file, sig_file):
     try:
         sig_map = load_data(sig_file)
@@ -112,53 +114,55 @@ def process_files(rtis_file, dlog_file, sig_file):
                 final_events.extend(grp[dt_check.isna() | (dt_check > 15)].to_dict('records'))
 
         st.session_state.events = sorted(final_events, key=lambda x: x['Time'])
-        st.success(f"Processed {len(st.session_state.events)} events!")
+        st.success(f"Successfully processed {len(st.session_state.events)} events!")
     except Exception as e:
-        st.error(f"Error processing files: {e}")
+        st.error(f"Error during processing: {e}")
 
-# --- UI Layout ---
-st.title("WR YY & Y Speed Analyzer - V44.6")
+# --- User Interface ---
+st.markdown(f"<h1 style='text-align: center; color: {SAFFRON};'>WR YY & Y Speed Analyzer - V44.6</h1>", unsafe_allow_html=True)
 
-# Sidebar for file uploads
+# Sidebar for Inputs
 with st.sidebar:
-    st.header("1. Upload Data")
-    rtis_up = st.file_uploader("RTIS File", type=['csv', 'xlsx'])
-    dlog_up = st.file_uploader("Datalogger File", type=['csv', 'xlsx'])
-    sig_up = st.file_uploader("Signal Mapping File", type=['csv', 'xlsx'])
+    st.header("📂 Data Input")
+    rtis_up = st.file_uploader("Upload RTIS File", type=['csv', 'xlsx'])
+    dlog_up = st.file_uploader("Upload Datalogger File", type=['csv', 'xlsx'])
+    sig_up = st.file_uploader("Upload Signal Mapping File", type=['csv', 'xlsx'])
     
-    if st.button("🚀 PROCESS DATA"):
+    if st.button("🚀 PROCESS ALL DATA", use_container_width=True):
         if rtis_up and dlog_up and sig_up:
             process_files(rtis_up, dlog_up, sig_up)
         else:
-            st.warning("Please upload all 3 files.")
+            st.error("Please upload all three files first!")
 
-# Main Dashboard
+# Main Dashboard View
 if st.session_state.events:
+    # 1. Filters
+    st.subheader("📊 Event Analysis")
+    filter_opt = st.radio("Show Aspects:", ["All", "Yellow", "Double Yellow"], horizontal=True)
+    
+    full_df = pd.DataFrame(st.session_state.events)
+    display_df = full_df if filter_opt == "All" else full_df[full_df['Aspect'] == filter_opt]
+
+    # 2. Main Layout (Table on left, Graph on right)
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.subheader("Event List")
-        filter_opt = st.radio("Filters:", ["All", "Yellow", "Double Yellow"], horizontal=True)
-        
-        # Apply Filter
-        display_df = pd.DataFrame(st.session_state.events)
-        if filter_opt != "All":
-            display_df = display_df[display_df['Aspect'] == filter_opt]
-        
-        # Selection
-        selected_indices = st.dataframe(
+        st.write("Click a row to view the detailed speed graph:")
+        # Display table and capture selection
+        event_selection = st.dataframe(
             display_df[['Stn', 'Sig', 'Time', 'Aspect', 'Speed', 'RTIS_Stn']],
             on_select="rerun",
-            selection_mode="single-row"
+            selection_mode="single-row",
+            hide_index=True,
+            use_container_width=True
         )
 
     with col2:
-        st.subheader("Analysis Graph")
-        if selected_indices and len(selected_indices.selection.rows) > 0:
-            idx = selected_indices.selection.rows[0]
-            ev = display_df.iloc[idx]
+        if event_selection and len(event_selection.selection.rows) > 0:
+            row_idx = event_selection.selection.rows[0]
+            ev = display_df.iloc[row_idx]
             
-            # Plotting
+            # Plot Individual Graph
             fig, ax = plt.subplots(figsize=(10, 6))
             rtis = st.session_state.rtis
             sub = rtis[(rtis['CumDist'] >= ev['CumDist'] - 1000) & (rtis['CumDist'] <= ev['CumDist'] + 1000)]
@@ -176,15 +180,60 @@ if st.session_state.events:
                          fontweight='bold', fontsize=10)
 
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-            ax.set_title(f"{ev['Stn']} | {ev['Sig']} | {ev['Aspect']} -> RED", fontweight='bold')
+            ax.set_title(f"ANALYSIS: {ev['Stn']} | {ev['Sig']} | {ev['Aspect']} -> RED", fontweight='bold')
             ax.set_ylabel("Speed (km/h)")
             ax.grid(True, alpha=0.3)
             st.pyplot(fig)
         else:
-            st.info("Select a row in the table to view the graph.")
+            st.info("👈 Select a record from the table to visualize the data.")
 
-    # Export Section
+    # 3. Export & Download Section
     st.divider()
-    st.subheader("📥 Downloads")
-    csv = display_df.to_csv(index=False).encode('utf-8')
-    st.download_button("Download Report as CSV", data=csv, file_name="railway_report.csv", mime="text/csv")
+    st.subheader("📥 Export Center")
+    dl_col1, dl_col2 = st.columns(2)
+
+    with dl_col1:
+        # Download Excel Report
+        csv_data = display_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📄 Download Excel Report (CSV)",
+            data=csv_data,
+            file_name=f"Railway_Report_{filter_opt}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+    with dl_col2:
+        # ZIP Download for all graphs
+        if st.button("📦 Generate All Graphs (ZIP)", use_container_width=True):
+            with st.spinner("Creating high-precision graphs... please wait."):
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                    for i, ev in enumerate(display_df.to_dict('records')):
+                        # Recreate plot for each event
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        rtis = st.session_state.rtis
+                        sub = rtis[(rtis['CumDist'] >= ev['CumDist'] - 1000) & (rtis['CumDist'] <= ev['CumDist'] + 1000)]
+                        ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
+                        ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E')
+                        ax.axvline(x=ev['Time'], color='red', linestyle='--')
+                        
+                        time_ms = ev['Time'].strftime('%H:%M:%S.%f')[:-3]
+                        ax.annotate(f"STN: {ev['Stn']}\nSIG: {ev['Sig']}\nSPEED: {ev['Speed']}", 
+                                    xy=(ev['Time'], ev['Speed']), xytext=(15, 15), textcoords='offset points',
+                                    bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.8))
+                        
+                        # Save to buffer
+                        img_io = BytesIO()
+                        fig.savefig(img_io, format='png')
+                        plt.close(fig) # Prevent memory leak
+                        
+                        zip_file.writestr(f"Graph_{i+1}_{ev['Sig']}.png", img_io.getvalue())
+                
+                st.download_button(
+                    label="✅ Download All Graphs (.ZIP)",
+                    data=zip_buffer.getvalue(),
+                    file_name="Annotated_Graphs.zip",
+                    mime="application/zip",
+                    use_container_width=True
+                )
