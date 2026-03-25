@@ -10,21 +10,16 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 import matplotlib.dates as mdates
 
 # =========================================================
-#          Loco-Speed Safety Audit - V49.0 (FINAL AUTO)
+#          Loco-Speed Safety Audit - V51.0 (FINAL)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
 SAFFRON = "#33D4FC"
-BG_MAP = {
-    "Green": "#0D860D",
-    "Yellow": "#EEF153",
-    "Double Yellow": "#EFA627",
-    "Red": "#F2F2F2"
-}
+BG_MAP = {"Green": "#0D860D", "Yellow": "#EEF153", "Double Yellow": "#EFA627", "Red": "#F2F2F2"}
 
 st.markdown(f"""
     <div style="background-color:{SAFFRON}; padding:15px; border-radius:10px; color:white; text-align:center;">
-        <h1 style='margin:0;'>🚄 Loco-Speed Safety Audit (SSI & Auto Signal) </h1>
+        <h1 style='margin:0;'>🚄 Loco-Speed Safety Audit (Precision Mode) </h1>
     </div>
 """, unsafe_allow_html=True)
 
@@ -32,9 +27,6 @@ if 'events' not in st.session_state: st.session_state.events = []
 if 'rtis' not in st.session_state: st.session_state.rtis = None
 if 'processed' not in st.session_state: st.session_state.processed = False
 
-# =========================================================
-#                     HELPER FUNCTIONS
-# =========================================================
 def clean_id(s):
     s = str(s).strip().upper()
     m = re.search(r'([AS])?-?(\d+)', s)
@@ -48,8 +40,7 @@ def base_station(s):
 
 def relay_type(name):
     name = str(name).upper()
-    # No word boundaries (\b) to allow matching inside A25823RECR
-    # Double Yellow Priority first
+    # Word boundary removed to match A25823RECR style names
     if re.search(r'HHECR|HHECPR|HHGCR|H_HH_ECR|HHECPR2_K', name): return 'Double Yellow'
     if re.search(r'DECR|DECPR|DGCR|DECPR_K', name): return 'Green'
     if re.search(r'HECR|HGCR|HECPR', name): return 'Yellow'
@@ -67,11 +58,8 @@ def load_file(file_name, file_bytes):
             file_obj.seek(0)
             return pd.read_csv(file_obj, encoding='latin1', on_bad_lines='skip', low_memory=False)
 
-# =========================================================
-#           CORE PROCESSING - AUTO SIGNAL LOGIC
-# =========================================================
 def process_data(rtis_up, dlog_up, sig_up):
-    with st.spinner("⏳ Processing... Finding BHET A25823 and others."):
+    with st.spinner("⏳ Analyzing Pass-through Events..."):
         try:
             sig_map = load_file(sig_up.name, sig_up.getvalue())
             up_signals = {clean_id(s) for s in sig_map.iloc[:, 6].dropna().astype(str) if clean_id(s)}
@@ -119,9 +107,11 @@ def process_data(rtis_up, dlog_up, sig_up):
                         idx = diffs.idxmin()
                         pt = rtis.loc[idx]
                         
-                        # Fix: Automatic signals (Starting with 'A') can skip strict Station check
-                        # because they are often between stations in RTIS logs.
-                        stn_match = (pt['BASE_STN'] == stn) or sig.startswith('A')
+                        # PHYSICAL PASSING CHECK:
+                        # 1. Speed MUST be > 0
+                        # 2. For Auto signals ('A'), we allow station mismatch as they are between stations
+                        is_auto = sig.startswith('A')
+                        stn_match = (pt['BASE_STN'] == stn) or is_auto
                         
                         if pt['Speed'] > 0 and diffs[idx].total_seconds() <= 15 and stn_match:
                             raw_events.append({
@@ -135,7 +125,6 @@ def process_data(rtis_up, dlog_up, sig_up):
                     if priority_map.get(rtype, 0) >= priority_map.get(latch_aspect[key], 0):
                         latch_aspect[key] = rtype
 
-            # Filter Duplicates
             final_events = []
             if raw_events:
                 df_ev = pd.DataFrame(raw_events).sort_values(['Stn', 'Sig', 'Time'])
@@ -146,18 +135,15 @@ def process_data(rtis_up, dlog_up, sig_up):
 
             st.session_state.events = sorted(final_events, key=lambda x: x['Time'])
             st.session_state.processed = True
-            st.success(f"✅ Audit Ready! Found {len(st.session_state.events)} events.")
+            st.success(f"✅ Processed {len(st.session_state.events)} events.")
         except Exception as e: st.error(f"❌ Error: {str(e)}")
 
-# =========================================================
-#                     UI / DISPLAY
-# =========================================================
 def generate_excel(data):
     output = io.BytesIO()
     export_df = pd.DataFrame([{
         'Station': ev['Stn'], 'Signal': ev['Sig'], 
         'Passing Time': ev['Time'].strftime('%d/%m/%Y %H:%M:%S.%f')[:-3],
-        'Aspect': ev['Aspect'], 'Speed (km/h)': ev['Speed'], 'RTIS Station': ev['RTIS_Stn']
+        'Aspect': ev['Aspect'], 'Speed (km/h)': ev['Speed'], 'RTIS Location': ev['RTIS_Stn']
     } for ev in data])
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         export_df.to_excel(writer, index=False, sheet_name='Audit')
@@ -167,8 +153,8 @@ with st.sidebar:
     rtis_f = st.file_uploader("RTIS", type=['csv', 'xlsx'])
     dlog_f = st.file_uploader("Datalogger", type=['csv', 'xlsx'])
     sig_f = st.file_uploader("Signal Map", type=['csv', 'xlsx'])
-    if st.button("🚀 RUN AUDIT"): process_data(rtis_f, dlog_f, sig_f)
+    if st.button("🚀 PROCESS"): process_data(rtis_f, dlog_f, sig_f)
 
 if st.session_state.processed:
-    st.download_button("📥 Download Excel Report", data=generate_excel(st.session_state.events), file_name="Safety_Audit.xlsx")
+    st.download_button("📥 Excel Audit", data=generate_excel(st.session_state.events), file_name="Safety_Audit.xlsx")
     st.dataframe(pd.DataFrame(st.session_state.events), use_container_width=True)
