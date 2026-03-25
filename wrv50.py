@@ -10,12 +10,11 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 import matplotlib.dates as mdates
 
 # =========================================================
-#          STREAMLIT PAGE SETUP - V45.0 (FINAL LOGIC)
+#          STREAMLIT PAGE SETUP - V46.0 (PRIORITY LOGIC)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
 SAFFRON = "#33D4FC"
-NAVY = "#1A237E"
 BG_MAP = {
     "Green": "#0D860D",
     "Yellow": "#EEF153",
@@ -40,15 +39,19 @@ if 'processed' not in st.session_state: st.session_state.processed = False
 #                     HELPER FUNCTIONS
 # =========================================================
 def clean_id(s):
+    # Modified to capture alphanumeric signal IDs like A25823
     m = re.search(r'([AS])?-?(\d+)', str(s).upper())
-    return f"{m.group(1) or 'S'}{m.group(2)}" if m else None
+    if m:
+        prefix = m.group(1) or 'S'
+        return f"{prefix}{m.group(2)}"
+    return None
 
 def base_station(s):
     return str(s).split('_')[0].split('-')[0].split(' ')[0].upper()
 
 def relay_type(name):
     name = str(name).upper()
-    # \b is used for exact word matching to avoid HECR matching inside HHECR
+    # Priority Keywords Matching
     if re.search(r'\b(HHECR|HHECPR|HHGCR|H_HH_ECR)\b', name) or 'HHECPR2_K' in name: 
         return 'Double Yellow'
     if re.search(r'\b(DECR|DECPR|DGCR)\b', name) or 'DECPR_K' in name: 
@@ -72,16 +75,16 @@ def load_file(file_name, file_bytes):
             return pd.read_csv(file_obj, encoding='latin1', on_bad_lines='skip', low_memory=False)
 
 # =========================================================
-#                 CORE PROCESSING - JUST BEFORE RED
+#           CORE PROCESSING - PRIORITY & PASSING LOGIC
 # =========================================================
 def process_data(rtis_up, dlog_up, sig_up):
-    with st.spinner("⏳ Analyzing Pass-through Events..."):
+    with st.spinner("⏳ Processing Signals with Priority Logic..."):
         try:
-            # 1. Load Signals
+            # 1. Load Files
             sig_map = load_file(sig_up.name, sig_up.getvalue())
+            # Capture all possible signal IDs from mapping
             up_signals = {clean_id(s) for s in sig_map.iloc[:, 6].dropna().astype(str) if clean_id(s)}
 
-            # 2. Load RTIS
             rtis = load_file(rtis_up.name, rtis_up.getvalue())
             rtis.columns = rtis.columns.str.strip()
             rtis['Logging Time'] = pd.to_datetime(rtis['Logging Time'], format='mixed', errors='coerce')
@@ -90,7 +93,6 @@ def process_data(rtis_up, dlog_up, sig_up):
             rtis['BASE_STN'] = rtis['STATION NAME'].astype(str).apply(base_station)
             st.session_state.rtis = rtis
 
-            # 3. Load Datalogger
             dlog = load_file(dlog_up.name, dlog_up.getvalue())
             dlog.columns = dlog.columns.str.strip()
             dlog = dlog.rename(columns={'STATION NAME': 'STATION_NAME', 'SIGNAL NAME': 'SIGNAL_NAME', 
@@ -98,9 +100,12 @@ def process_data(rtis_up, dlog_up, sig_up):
             
             time_series = dlog['SIGNAL_TIME'].astype(str).str.replace(r':(\d{3})$', r'.\1', regex=True)
             dlog['dt'] = pd.to_datetime(time_series, format='mixed', dayfirst=True, errors='coerce')
-            dlog = dlog.dropna(subset=['dt']).sort_values('dt')
+            dlog = dlog.dropna(subset=['dt']).sort_values(['dt', 'SIGNAL_NAME']) # Sort by time then name
 
-            # --- Logic: Aspect Before Red ---
+            # --- Logic: Priority & Latching ---
+            # Priority Level: Green(3) > Double Yellow(2) > Yellow(1) > Red(0)
+            priority = {"Green": 3, "Double Yellow": 2, "Yellow": 1, "Red": 0}
+            
             latch_aspect = collections.defaultdict(lambda: "Red")
             raw_events = []
 
@@ -108,7 +113,7 @@ def process_data(rtis_up, dlog_up, sig_up):
                 stn = base_station(row.STATION_NAME)
                 sig_full = str(row.SIGNAL_NAME).strip().upper()
                 sig = clean_id(sig_full)
-                if sig not in up_signals: continue
+                if not sig or sig not in up_signals: continue
                 
                 rtype = relay_type(sig_full)
                 if not rtype: continue
@@ -118,30 +123,32 @@ def process_data(rtis_up, dlog_up, sig_up):
                 key = (stn, sig)
 
                 if rtype == 'Red' and is_up:
-                    # Train cross hui -> Red UP hua
-                    # Hum latch se wahi aspect lenge jo Red hone se theek pehle tha
-                    aspect_at_passing = latch_aspect[key]
+                    # PASSING POINT: Get aspect stored JUST BEFORE Red
+                    aspect_before_red = latch_aspect[key]
                     
-                    if aspect_at_passing != "Red":
+                    if aspect_before_red != "Red":
                         ev_time = row.dt
                         diffs = (rtis['Logging Time'] - ev_time).abs()
                         idx = diffs.idxmin()
                         pt = rtis.loc[idx]
                         
-                        if pt['Speed'] > 1 and diffs[idx].total_seconds() <= 15 and pt['BASE_STN'] == stn:
+                        if pt['Speed'] > 1 and diffs[idx].total_seconds() <= 15:
                             raw_events.append({
                                 'Stn': stn, 'Sig': sig, 'Time': ev_time,
-                                'Aspect': aspect_at_passing, 
+                                'Aspect': aspect_before_red, 
                                 'Speed': pt['Speed'],
                                 'CumDist': pt['CumDist'], 'RTIS_Stn': pt['BASE_STN']
                             })
-                    latch_aspect[key] = "Red" # Red hone ke baad latch reset
+                    latch_aspect[key] = "Red" 
 
-                elif is_up and rtype in ['Green', 'Double Yellow', 'Yellow']:
-                    # Update latch only when a positive aspect is picked up
-                    latch_aspect[key] = rtype
+                elif is_up:
+                    # Update Latch with Priority Check
+                    # Agar current memory mein Yellow hai aur naya relay Double Yellow hai, toh update karein.
+                    current_stored = latch_aspect[key]
+                    if priority.get(rtype, 0) >= priority.get(current_stored, 0):
+                        latch_aspect[key] = rtype
 
-            # 4. Filter Duplicates (15s Window)
+            # 4. Filter Duplicates
             final_events = []
             if raw_events:
                 df_ev = pd.DataFrame(raw_events).sort_values(['Stn', 'Sig', 'Time'])
@@ -152,22 +159,22 @@ def process_data(rtis_up, dlog_up, sig_up):
 
             st.session_state.events = sorted(final_events, key=lambda x: x['Time'])
             st.session_state.processed = True
-            st.success(f"✅ Analysis Complete! Found {len(st.session_state.events)} events.")
+            st.success(f"✅ Processed! Found {len(st.session_state.events)} pass-through events.")
         except Exception as e:
-            st.error(f"❌ Processing Error: {str(e)}")
+            st.error(f"❌ Error: {str(e)}")
 
 # =========================================================
-#                     REPORTING & UI
+#                     UI & DISPLAY
 # =========================================================
 def generate_excel(data):
     output = io.BytesIO()
     export_df = pd.DataFrame([{
         'Station': ev['Stn'], 'Signal': ev['Sig'], 
         'Passing Time': ev['Time'].strftime('%d/%m/%Y %H:%M:%S.%f')[:-3],
-        'Aspect Before Red': ev['Aspect'], 'Speed (km/h)': ev['Speed'], 'RTIS Stn': ev['RTIS_Stn']
+        'Aspect': ev['Aspect'], 'Speed (km/h)': ev['Speed']
     } for ev in data])
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        export_df.to_excel(writer, index=False, sheet_name='Safety_Audit')
+        export_df.to_excel(writer, index=False, sheet_name='Audit')
     return output.getvalue()
 
 def generate_zip_graphs(data, rtis_df):
@@ -179,77 +186,52 @@ def generate_zip_graphs(data, rtis_df):
             ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
             ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E', lw=2.5)
             ax.axvline(x=ev['Time'], color='red', linestyle='--', linewidth=2)
-            time_ms = ev['Time'].strftime('%H:%M:%S.%f')[:-3]
-            box_text = f"STN: {ev['Stn']}\nSIG: {ev['Sig']}\nPASS TIME: {time_ms}\nASPECT: {ev['Aspect']}\nSPEED: {ev['Speed']} km/h"
+            box_text = f"STN: {ev['Stn']}\nSIG: {ev['Sig']}\nASPECT: {ev['Aspect']}\nSPEED: {ev['Speed']} km/h"
             ax.annotate(box_text, xy=(ev['Time'], ev['Speed']), xytext=(20, 20), textcoords='offset points',
                         bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="red", lw=2, alpha=0.9),
                         arrowprops=dict(arrowstyle="-|>", connectionstyle="arc3,rad=0.3", color="red"),
                         fontweight='bold', fontsize=10)
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-            ax.set_title(f"DETAILED ANALYSIS: {ev['Stn']} | {ev['Sig']} | {ev['Aspect']} -> RED", fontweight='bold')
-            ax.set_ylabel("Speed (km/h)", fontweight='bold')
-            ax.grid(True, alpha=0.3)
             img_buffer = io.BytesIO()
             fig.savefig(img_buffer, format="png", bbox_inches='tight')
             plt.close(fig)
-            zip_file.writestr(f"Graph_{i+1}_{ev['Sig']}.png", img_buffer.getvalue())
+            zip_file.writestr(f"Graph_{ev['Stn']}_{ev['Sig']}.png", img_buffer.getvalue())
     return zip_buffer.getvalue()
 
 with st.sidebar:
-    st.header("📁 1. Load Files")
-    rtis_f = st.file_uploader("RTIS File", type=['csv', 'xlsx'])
-    dlog_f = st.file_uploader("Datalogger File", type=['csv', 'xlsx'])
-    sig_f = st.file_uploader("Signal Mapping File", type=['csv', 'xlsx'])
-    if st.button("🚀 PROCESS DATA", use_container_width=True, type="primary"):
+    st.header("📁 Load Files")
+    rtis_f = st.file_uploader("RTIS", type=['csv', 'xlsx'])
+    dlog_f = st.file_uploader("Datalogger", type=['csv', 'xlsx'])
+    sig_f = st.file_uploader("Signal Map", type=['csv', 'xlsx'])
+    if st.button("🚀 PROCESS", use_container_width=True, type="primary"):
         if rtis_f and dlog_f and sig_f: process_data(rtis_f, dlog_f, sig_f)
-        else: st.warning("Please upload all 3 files.")
 
 if st.session_state.processed and st.session_state.events:
-    col1, col2, col3, col4 = st.columns([1.5, 2, 1, 1.5])
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
-        st.markdown("**Filters:**")
-        filter_opt = st.radio("Aspect:", ["All", "Yellow", "Double Yellow"], horizontal=True, label_visibility="collapsed")
-    filtered_events = st.session_state.events
-    if filter_opt != "All": filtered_events = [e for e in st.session_state.events if e['Aspect'] == filter_opt]
+        f_opt = st.radio("Filter Aspect:", ["All", "Yellow", "Double Yellow", "Green"], horizontal=True)
+    filtered = st.session_state.events
+    if f_opt != "All": filtered = [e for e in st.session_state.events if e['Aspect'] == f_opt]
     
-    with col3:
-        st.download_button("📥 Excel Report", data=generate_excel(filtered_events), file_name="Safety_Report.xlsx")
-    with col4:
-        st.download_button("🖼 ZIP Graphs", data=generate_zip_graphs(filtered_events, st.session_state.rtis), file_name="Graphs.zip")
+    st.download_button("📥 Excel", data=generate_excel(filtered), file_name="Report.xlsx")
+    st.download_button("🖼 ZIP", data=generate_zip_graphs(filtered, st.session_state.rtis), file_name="Graphs.zip")
 
     st.divider()
-    c_left, c_right = st.columns([1.2, 1.5])
-    with c_left:
-        st.write("### 📜 SIGNAL ASPECT Table")
-        display_df = pd.DataFrame(filtered_events)
-        if not display_df.empty:
-            display_df['Time (ms)'] = display_df['Time'].dt.strftime('%H:%M:%S.%f').str[:-3]
-            selected_row = st.dataframe(display_df[['Stn', 'Sig', 'Time (ms)', 'Aspect', 'Speed']], 
-                                      on_select="rerun", selection_mode="single-row", hide_index=True, use_container_width=True, height=500)
-        else: st.info("No events found.")
-
-    with c_right:
-        st.write("### 📈 Precision Graph Analysis")
-        if not display_df.empty:
-            idx = selected_row.selection.rows[0] if (selected_row and len(selected_row.selection.rows) > 0) else 0
-            ev = filtered_events[idx]
-            rtis_df = st.session_state.rtis
-            sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1000) & (rtis_df['CumDist'] <= ev['CumDist'] + 1000)]
+    c_l, c_r = st.columns([1, 1.5])
+    with c_l:
+        df_disp = pd.DataFrame(filtered)
+        if not df_disp.empty:
+            df_disp['Time'] = df_disp['Time'].dt.strftime('%H:%M:%S.%f').str[:-3]
+            sel = st.dataframe(df_disp[['Stn', 'Sig', 'Time', 'Aspect', 'Speed']], 
+                             on_select="rerun", selection_mode="single-row", hide_index=True)
+    with c_r:
+        if not df_disp.empty:
+            idx = sel.selection.rows[0] if (sel and len(sel.selection.rows) > 0) else 0
+            ev = filtered[idx]
             fig, ax = plt.subplots(figsize=(10, 6))
+            sub = st.session_state.rtis[(st.session_state.rtis['CumDist'] >= ev['CumDist'] - 1000) & (st.session_state.rtis['CumDist'] <= ev['CumDist'] + 1000)]
             ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
-            ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E', lw=2.5)
-            ax.axvline(x=ev['Time'], color='red', linestyle='--', linewidth=2)
-            time_ms = ev['Time'].strftime('%H:%M:%S.%f')[:-3]
-            box_text = f"STN: {ev['Stn']}\nSIG: {ev['Sig']}\nTIME: {time_ms}\nASPECT: {ev['Aspect']}\nSPEED: {ev['Speed']} km/h"
-            ax.annotate(box_text, xy=(ev['Time'], ev['Speed']), xytext=(20, 20), textcoords='offset points',
-                        bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="red", lw=2, alpha=0.9),
-                        arrowprops=dict(arrowstyle="-|>", connectionstyle="arc3,rad=0.3", color="red"),
-                        fontweight='bold', fontsize=10)
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-            ax.set_title(f"PASSING ANALYSIS: {ev['Stn']} {ev['Sig']} at {ev['Aspect']}", fontweight='bold')
-            ax.set_ylabel("Speed (km/h)")
+            ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E', lw=2)
+            ax.axvline(x=ev['Time'], color='red', ls='--')
+            ax.set_title(f"Passing: {ev['Stn']} {ev['Sig']} ({ev['Aspect']})")
             st.pyplot(fig)
-elif st.session_state.processed:
-    st.info("No safety events found.")
-else:
-    st.info("👈 Please upload the 3 files in the sidebar and click 'PROCESS DATA'.")
