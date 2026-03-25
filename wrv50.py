@@ -51,10 +51,25 @@ def base_station(s):
 
 def relay_type(name):
     name = str(name).upper()
-    if any(x in name for x in['DECR','DECPR_K','DECPR', 'DGCR']): return 'Green'
-    if any(x in name for x in ['HHECR','HHECPR2_K', 'HHGCR']): return 'Double Yellow'
-    if any(x in name for x in ['HECR', 'HGCR']): return 'Yellow'
-    if any(x in name for x in ['RECR', 'RGCR']): return 'Red'
+    
+    # 1. DOUBLE YELLOW (Sabse pehle check karein taaki priority mile)
+    # Pattern: HHECR ya HHGCR ya HHECPR
+    if re.search(r'\b(HHECR|HHECPR|HHGCR|H_HH_ECR)\b', name) or 'HHECPR2_K' in name:
+        return 'Double Yellow'
+    
+    # 2. GREEN
+    if re.search(r'\b(DECR|DECPR|DGCR)\b', name) or 'DECPR_K' in name:
+        return 'Green'
+    
+    # 3. YELLOW
+    # Yahan \b ka matlab hai 'Word Boundary', taaki HHECR mein se HECR match na ho
+    if re.search(r'\b(HECR|HGCR)\b', name):
+        return 'Yellow'
+    
+    # 4. RED
+    if re.search(r'\b(RECR|RGCR)\b', name):
+        return 'Red'
+    
     return None
 
 @st.cache_data(show_spinner=False)
