@@ -8,9 +8,18 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # =========================================================
-#         STREAMLIT PAGE SETUP - V45.7 (SPEED FIXED)
+#         STREAMLIT PAGE SETUP - V45.8 (ERROR FIXED)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
+
+# --- INITIALIZE SESSION STATE (IMPORTANT) ---
+# Ye check karta hai ki agar processed nahi hai toh use False set kar de
+if 'processed' not in st.session_state:
+    st.session_state.processed = False
+if 'events' not in st.session_state:
+    st.session_state.events = []
+if 'rtis' not in st.session_state:
+    st.session_state.rtis = None
 
 SAFFRON = "#33D4FC"
 BG_MAP = {"Green": "#0D860D", "Yellow": "#EEF153", "Double Yellow": "#EFA627", "Red": "#F2F2F2"}
@@ -20,11 +29,8 @@ st.markdown(f"""
     <style>
     .top-header {{ background-color: {SAFFRON}; padding: 15px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px; }}
     </style>
-    <div class="top-header"><h1 style='margin:0;'>🚄 Loco-Speed Precision Audit (Speed Fixed)</h1></div>
+    <div class="top-header"><h1 style='margin:0;'>🚄 Loco-Speed Precision Audit</h1></div>
 """, unsafe_allow_html=True)
-
-if 'events' not in st.session_state: st.session_state.events = []
-if 'rtis' not in st.session_state: st.session_state.rtis = None
 
 # =========================================================
 #                     HELPER FUNCTIONS
@@ -61,25 +67,21 @@ def relay_type(name):
 def process_data(rtis_up, dlog_up, sig_up):
     with st.spinner("⏳ Speed Validating (RTIS Seconds Mapping)..."):
         try:
-            # 1. Load Mapping
             sig_map = load_file(sig_up.name, sig_up.getvalue())
             up_signals = {clean_id(s) for s in sig_map.iloc[:, 6].dropna().astype(str) if clean_id(s)}
 
-            # 2. Load and Fix RTIS (ASSIGNING SECONDS TO 1-MINUTE CHUNKS)
             rtis = load_file(rtis_up.name, rtis_up.getvalue())
             rtis.columns = rtis.columns.str.strip()
             rtis['Base_Time'] = pd.to_datetime(rtis['Logging Time'], format='mixed', dayfirst=True, errors='coerce')
             rtis = rtis.dropna(subset=['Base_Time']).sort_values('Base_Time')
             
-            # Assignment: Kyunki RTIS mein har minute ke 60 rows hain, hum unhe 0-59 seconds allot karenge
+            # RTIS Seconds Correction (For 79.71 Precision)
             rtis['sec_val'] = rtis.groupby('Base_Time').cumcount() % 60
             rtis['Precise_Time'] = rtis['Base_Time'] + pd.to_timedelta(rtis['sec_val'], unit='s')
-            
             rtis['CumDist'] = pd.to_numeric(rtis.get('distFromSpeed', 0), errors='coerce').fillna(0).cumsum()
             rtis['BASE_STN'] = rtis['STATION NAME'].astype(str).apply(base_station)
             st.session_state.rtis = rtis
 
-            # 3. Load Datalogger
             dlog = load_file(dlog_up.name, dlog_up.getvalue())
             dlog.columns = dlog.columns.str.strip()
             dlog = dlog.rename(columns={'STATION NAME': 'STATION_NAME', 'SIGNAL NAME': 'SIGNAL_NAME', 'SIGNAL STATUS': 'SIGNAL_STATUS', 'SIGNAL TIME': 'SIGNAL_TIME'})
@@ -109,14 +111,11 @@ def process_data(rtis_up, dlog_up, sig_up):
                     stn_rtis = rtis[rtis['BASE_STN'] == stn]
                     if stn_rtis.empty: continue
                     
-                    # SPEED FIX: Find the closest record based on our generated Precise_Time
                     diffs = (stn_rtis['Precise_Time'] - ev_time).abs()
                     nearest_idx = diffs.idxmin()
                     
-                    # Agar difference 15s ke andar hai tabhi record karein
                     if diffs[nearest_idx].total_seconds() <= 15:
                         final_speed = stn_rtis.loc[nearest_idx, 'Speed']
-                        
                         if final_speed > 1:
                             final_asp = latch_aspect[key]
                             if key in simult_drops:
@@ -136,19 +135,19 @@ def process_data(rtis_up, dlog_up, sig_up):
                     if is_up: latch_aspect[key] = row.rtype
                     else: simult_drops[key].append({'asp': row.rtype, 'time': row.dt})
 
-            # 4. Deduplication: Keep only the LAST event for each signal pass
             if raw_events:
                 df_res = pd.DataFrame(raw_events).sort_values(['Stn', 'Sig', 'Time'])
-                # Group by signal and station, but keep separate passes (diff > 60s)
                 df_res['pass_id'] = (df_res.groupby(['Stn', 'Sig'])['Time'].diff().dt.total_seconds() > 60).cumsum()
                 st.session_state.events = df_res.groupby(['Stn', 'Sig', 'pass_id'], as_index=False).last().to_dict('records')
             
             st.session_state.processed = True
-            st.success("✅ Speed Data Validated (UDN 79.71 fixed).")
+            st.success("✅ Analysis Complete.")
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
 
-# UI Code remains the same...
+# =========================================================
+#                     UI LAYOUT
+# =========================================================
 with st.sidebar:
     st.header("📁 Load Files")
     rtis_f = st.file_uploader("RTIS", type=['csv', 'xlsx'])
@@ -157,16 +156,24 @@ with st.sidebar:
     if st.button("🚀 PROCESS", use_container_width=True, type="primary"):
         if rtis_f and dlog_f and sig_f: process_data(rtis_f, dlog_f, sig_f)
 
-if st.session_state.processed and st.session_state.events:
+# --- SAFE ATTRIBUTE ACCESS ---
+if st.session_state.get('processed') and st.session_state.get('events'):
     df_disp = pd.DataFrame(st.session_state.events)
     df_disp['Time_ms'] = df_disp['Time'].dt.strftime('%H:%M:%S.%f').str[:-3]
     c1, c2 = st.columns([1, 1.5])
     with c1:
+        st.write("### 📜 Event Results")
         sel = st.dataframe(df_disp[['Stn', 'Sig', 'Time_ms', 'Aspect', 'Speed']], on_select="rerun", selection_mode="single-row", hide_index=True)
     with c2:
-        idx = sel.selection.rows[0] if (sel and sel.selection.rows) else 0
+        st.write("### 📈 Analysis")
+        if sel and len(sel.selection.rows) > 0:
+            idx = sel.selection.rows[0]
+        else:
+            idx = 0
         ev = st.session_state.events[idx]
         sub = st.session_state.rtis[(st.session_state.rtis['CumDist'] >= ev['CumDist'] - 1000) & (st.session_state.rtis['CumDist'] <= ev['CumDist'] + 1000)]
-        fig, ax = plt.subplots(figsize=(10, 5)); ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
-        ax.plot(sub['Precise_Time'], sub['Speed'], marker='o', color='#1A237E'); ax.axvline(x=ev['Time'], color='red')
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
+        ax.plot(sub['Precise_Time'], sub['Speed'], marker='o', color='#1A237E')
+        ax.axvline(x=ev['Time'], color='red')
         st.pyplot(fig)
