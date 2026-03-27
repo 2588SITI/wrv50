@@ -167,45 +167,83 @@ def process_data(rtis_up, dlog_up, sig_up):
 # =========================================================
 #                     UI LAYOUT
 # =========================================================
-with st.sidebar:
-    st.header("📁 Load Files")
-    rtis_f = st.file_uploader("RTIS", type=['csv', 'xlsx'])
-    dlog_f = st.file_uploader("Datalogger", type=['csv', 'xlsx'])
-    sig_f = st.file_uploader("Signal Map", type=['csv', 'xlsx'])
-    if st.button("🚀 PROCESS DATA", use_container_width=True, type="primary"):
-        if rtis_f and dlog_f and sig_f: process_data(rtis_f, dlog_f, sig_f)
+def generate_excel(data):
+    output = io.BytesIO()
+    export_df = pd.DataFrame([{
+        'Station': ev['Stn'], 'Signal': ev['Sig'], 
+        'RECR Up Time (ms)': ev['Time'].strftime('%d/%m/%Y %H:%M:%S.%f')[:-3],
+        'Aspect': ev['Aspect'], 'Speed (km/h)': ev['Speed'], 'RTIS Stn': ev['RTIS_Stn']
+    } for ev in data])
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        export_df.to_excel(writer, index=False, sheet_name='SIGNAL ASPECTs')
+    return output.getvalue()
 
-if st.session_state.get('processed') and st.session_state.get('events'):
-    df_disp = pd.DataFrame(st.session_state.events)
-    df_disp['Time_ms'] = df_disp['Time'].dt.strftime('%d-%m-%Y %H:%M:%S.%f').str[:-3]
-    
-    col1, col2 = st.columns([1, 1.5])
-    with col1:
-        st.write("### 📜 Passing Events (Latest Only)")
-        sel = st.dataframe(df_disp[['Stn', 'Sig', 'Time_ms', 'Aspect', 'Speed']], on_select="rerun", selection_mode="single-row", hide_index=True)
-    
-    with col2:
-        st.write("### 📈 Precise Graph Analysis")
-        if sel and len(sel.selection.rows) > 0:
-            idx = sel.selection.rows[0]
+def generate_zip_graphs(data, rtis_df):
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        for i, ev in enumerate(data):
+            fig, ax = plt.subplots(figsize=(10, 6))
+            sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1000) & (rtis_df['CumDist'] <= ev['CumDist'] + 1000)]
+            ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
+            ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E', lw=2.5)
+            ax.axvline(x=ev['Time'], color='red', linestyle='--', linewidth=2)
+            time_ms = ev['Time'].strftime('%H:%M:%S.%f')[:-3]
+            box_text = f"STN: {ev['Stn']}\nSIG: {ev['Sig']}\nTIME: {time_ms}\nSPEED: {ev['Speed']} km/h"
+            ax.annotate(box_text, xy=(ev['Time'], ev['Speed']), xytext=(20, 20), textcoords='offset points',
+                        bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="red", lw=2, alpha=0.9),
+                        arrowprops=dict(arrowstyle="-|>", connectionstyle="arc3,rad=0.3", color="red"),
+                        fontweight='bold', fontsize=10)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+            ax.set_title(f"DETAILED ANALYSIS: {ev['Stn']} | {ev['Sig']} | {ev['Aspect']} -> RED", fontweight='bold')
+            ax.set_ylabel("Speed (km/h)", fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            img_buffer = io.BytesIO()
+            fig.savefig(img_buffer, format="png", bbox_inches='tight')
+            plt.close(fig)
+            zip_file.writestr(f"Graph_{i+1}_{ev['Sig']}.png", img_buffer.getvalue())
+    return zip_buffer.getvalue()
+
+with st.sidebar:
+    st.header("📁 1. Load Files")
+    rtis_f = st.file_uploader("RTIS File", type=['csv', 'xlsx'])
+    dlog_f = st.file_uploader("Datalogger File", type=['csv', 'xlsx'])
+    sig_f = st.file_uploader("Signal Mapping File", type=['csv', 'xlsx'])
+    if st.button("🚀 PROCESS DATA", use_container_width=True, type="primary"):
+        if rtis_f and dlog_f and sig_f:
+            process_data(rtis_f, dlog_f, sig_f)
         else:
-            idx = 0
-        ev = st.session_state.events[idx]
-        rtis_df = st.session_state.rtis
-        # Zoom view around the event
-        sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1000) & (rtis_df['CumDist'] <= ev['CumDist'] + 1000)]
-        
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
-        ax.plot(sub['Precise_Time'], sub['Speed'], marker='o', markersize=4, color='#1A237E', label="Train Path")
-        ax.axvline(x=ev['Time'], color='red', linestyle='--', label="Pass Point")
-        
-        # Details Box with millisecond precision
-        label = f"STN: {ev['Stn']} | SIG: {ev['Sig']}\nTIME: {ev['Time'].strftime('%H:%M:%S.%f')[:-3]}\nSPEED: {ev['Speed']} km/h\n{ev['Aspect']} ➔ RED"
-        ax.annotate(label, xy=(ev['Time'], ev['Speed']), xytext=(35, 35), textcoords='offset points', fontweight='bold',
-                    bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.9), arrowprops=dict(arrowstyle="->"))
-        
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-        ax.set_ylabel("Speed (km/h)")
-        ax.grid(True, alpha=0.3)
-        st.pyplot(fig)
+            st.warning("Please upload all 3 files first.")
+
+if st.session_state.processed and st.session_state.events:
+    col1, col2, col3, col4 = st.columns([1.5, 2, 1, 1.5])
+    with col1:
+        filter_opt = st.radio("Aspect:", ["All", "Yellow", "Double Yellow"], horizontal=True)
+    
+    filtered_events = st.session_state.events
+    if filter_opt != "All":
+        filtered_events = [e for e in st.session_state.events if e['Aspect'] == filter_opt]
+    
+    with col3:
+        st.download_button("📥 Excel Report", data=generate_excel(filtered_events), file_name="Speed_Audit.xlsx")
+    with col4:
+        st.download_button("🖼 Graphs (ZIP)", data=generate_zip_graphs(filtered_events, st.session_state.rtis), file_name="Graphs.zip")
+
+    st.divider()
+    c_left, c_right = st.columns([1.2, 1.5])
+    with c_left:
+        st.write("### 📜 SIGNAL ASPECT Table")
+        display_df = pd.DataFrame(filtered_events)
+        if not display_df.empty:
+            display_df['Time (ms)'] = display_df['Time'].dt.strftime('%H:%M:%S.%f').str[:-3]
+            selected_row = st.dataframe(display_df[['Stn', 'Sig', 'Time (ms)', 'Aspect', 'Speed']], 
+                                        on_select="rerun", selection_mode="single-row", hide_index=True)
+    with c_right:
+        if not display_df.empty:
+            idx = selected_row.selection.rows[0] if (selected_row and selected_row.selection.rows) else 0
+            ev = filtered_events[idx]
+            sub = st.session_state.rtis[(st.session_state.rtis['CumDist'] >= ev['CumDist'] - 1000) & (st.session_state.rtis['CumDist'] <= ev['CumDist'] + 1000)]
+            fig, ax = plt.subplots()
+            ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
+            ax.plot(sub['Logging Time'], sub['Speed'])
+            ax.axvline(x=ev['Time'], color='red')
+            st.pyplot(fig)
