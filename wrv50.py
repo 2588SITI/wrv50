@@ -41,10 +41,22 @@ def base_station(s):
 def relay_type(name):
     name = str(name).upper()
     if any(x in name for x in ['DECR','DECPR_K','DECPR', 'DGCR']): return 'Green'
-    if any(x in name for x in ['HHECR','HHECPR2_K','HH_H_ECR','HHGCR']): return 'Double Yellow'
+    if any(x in name for x in ['HHECR','HHECPR2_K', 'HHGCR']): return 'Double Yellow'
     if any(x in name for x in ['HECR', 'HGCR']): return 'Yellow'
     if any(x in name for x in ['RECR', 'RGCR']): return 'Red'
     return None
+
+@st.cache_data(show_spinner=False)
+def load_file(file_name, file_bytes):
+    file_obj = io.BytesIO(file_bytes)
+    if file_name.endswith(('.xlsx', '.xls')):
+        return pd.read_excel(file_obj, engine='openpyxl')
+    else:
+        try:
+            return pd.read_csv(file_obj, engine='pyarrow')
+        except:
+            file_obj.seek(0)
+            return pd.read_csv(file_obj, encoding='latin1', on_bad_lines='skip', low_memory=False)
 
 # =========================================================
 #             FIXED SPEED VALIDATION LOGIC
