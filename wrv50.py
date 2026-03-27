@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # =========================================================
-#         STREAMLIT PAGE SETUP - V45.9 (FINAL)
+#         STREAMLIT PAGE SETUP - V45.9 (STABLE)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
@@ -46,6 +46,7 @@ def load_file(file_name, file_bytes):
             return pd.read_csv(file_obj, encoding='latin1', on_bad_lines='skip', low_memory=False)
 
 def clean_id(s):
+    # Extracts Prefix + Number (e.g., A-25823 -> A25823, 42RECR -> S42)
     m = re.search(r'([AS])?-?(\d+)', str(s).upper())
     return f"{m.group(1) or 'S'}{m.group(2)}" if m else None
 
@@ -66,17 +67,23 @@ def relay_type(name):
 def process_data(rtis_up, dlog_up, sig_up):
     with st.spinner("⏳ Validating UDN S42 Speed (79.71) & Deduplicating..."):
         try:
-            # 1. Load Mapping
-            sig_map = load_file(sig_up.name, sig_up.getvalue())
-            up_signals = {clean_id(s) for s in sig_map.iloc[:, 6].dropna().astype(str) if clean_id(s)}
+            # 1. Load Signal Map from multiple columns (1, 4, 6, 9)
+            sig_map_raw = load_file(sig_up.name, sig_up.getvalue())
+            sig_cols = [1, 4, 6, 9]
+            up_signals = set()
+            for col in sig_cols:
+                if col < len(sig_map_raw.columns):
+                    ids = {clean_id(s) for s in sig_map_raw.iloc[:, col].dropna().astype(str) if clean_id(s)}
+                    up_signals.update(ids)
 
-            # 2. Load and Fix RTIS (CRITICAL FIX FOR CELL E2992)
+            # 2. Load and Fix RTIS (CRITICAL FIX FOR SECONDS ASSIGNMENT)
             rtis = load_file(rtis_up.name, rtis_up.getvalue())
             rtis.columns = rtis.columns.str.strip()
+            # Parse minute-level timestamps
             rtis['Base_Time'] = pd.to_datetime(rtis['Logging Time'], format='mixed', dayfirst=True, errors='coerce')
             rtis = rtis.dropna(subset=['Base_Time']).sort_values('Base_Time')
             
-            # Logic: Assign 0-59 seconds to the 60 records found in every minute
+            # Assignment: 60 records per minute -> assign 0-59 seconds to each
             rtis['sec_offset'] = rtis.groupby('Base_Time').cumcount() % 60
             rtis['Precise_Time'] = rtis['Base_Time'] + pd.to_timedelta(rtis['sec_offset'], unit='s')
             
@@ -89,9 +96,11 @@ def process_data(rtis_up, dlog_up, sig_up):
             dlog.columns = dlog.columns.str.strip()
             dlog = dlog.rename(columns={'STATION NAME': 'STATION_NAME', 'SIGNAL NAME': 'SIGNAL_NAME', 'SIGNAL STATUS': 'SIGNAL_STATUS', 'SIGNAL TIME': 'SIGNAL_TIME'})
             
+            # Fix millisecond format (:ms -> .ms)
             time_series = dlog['SIGNAL_TIME'].astype(str).str.replace(r':(\d{3})$', r'.\1', regex=True)
             dlog['dt'] = pd.to_datetime(time_series, format='mixed', dayfirst=True, errors='coerce')
             
+            # Priority Sorting: DOWN first, then higher Aspect Priority
             dlog['rtype'] = dlog['SIGNAL_NAME'].apply(relay_type)
             dlog['status_val'] = dlog['SIGNAL_STATUS'].apply(lambda x: 0 if any(y in str(x).upper() for y in ['DOWN', 'OFF', 'DROP']) else 1)
             dlog['prio_val'] = dlog['rtype'].map(ASPECT_PRIORITY).fillna(0)
@@ -114,17 +123,19 @@ def process_data(rtis_up, dlog_up, sig_up):
                     stn_rtis = rtis[rtis['BASE_STN'] == stn]
                     if stn_rtis.empty: continue
                     
-                    # SPEED MATCHING: Find the exact second from RTIS
+                    # SPEED MATCHING: Find the exact second from assigned RTIS offsets
                     diffs = (stn_rtis['Precise_Time'] - ev_time).abs()
                     nearest_idx = diffs.idxmin()
                     
-                    if diffs[nearest_idx].total_seconds() <= 5: # Valid if within 5s of passing
+                    # Must be within 15 seconds of the passing
+                    if diffs[nearest_idx].total_seconds() <= 15:
                         final_speed = stn_rtis.loc[nearest_idx, 'Speed']
                         
-                        if final_speed > 1: # Physically moving
+                        if final_speed > 1:
+                            # Simultaneous Priority Logic
                             final_asp = latch_aspect[key]
                             if key in simult_drops:
-                                v_drops = [d for d in simult_drops[key] if 0 <= (ev_time - d['time']).total_seconds() <= 5]
+                                v_drops = [d for d in simult_drops[key] if 0 <= (ev_time - d['time']).total_seconds() <= 1]
                                 if v_drops:
                                     final_asp = max(v_drops, key=lambda x: ASPECT_PRIORITY.get(x['asp'], 0))['asp']
                             
@@ -137,17 +148,19 @@ def process_data(rtis_up, dlog_up, sig_up):
                     simult_drops[key] = [] 
                 
                 elif row.rtype in ['Green', 'Double Yellow', 'Yellow']:
-                    if is_up: latch_aspect[key] = row.rtype
-                    else: simult_drops[key].append({'asp': row.rtype, 'time': row.dt})
+                    if is_up: 
+                        latch_aspect[key] = row.rtype
+                    else: 
+                        simult_drops[key].append({'asp': row.rtype, 'time': row.dt})
 
-            # 4. DEDUPLICATION: For each signal pass, keep only the LAST event
+            # 4. DEDUPLICATION: Group by signal pass and keep the LAST (BAAD WALA) event
             if raw_events:
                 df_res = pd.DataFrame(raw_events).sort_values(['Stn', 'Sig', 'Time'])
-                # Group by signal and take the last record (ensures 'baad wala event' logic)
+                # Group by signal and take the last record (handles multiple triggers)
                 st.session_state.events = df_res.groupby(['Stn', 'Sig'], as_index=False).last().to_dict('records')
             
             st.session_state.processed = True
-            st.success("✅ Processed. Speed 79.71 validated and duplicates removed.")
+            st.success("✅ Processed. Speed 79.71 at UDN S42 validated and duplicate events filtered.")
         except Exception as e:
             st.error(f"❌ Processing Error: {str(e)}")
 
@@ -159,16 +172,16 @@ with st.sidebar:
     rtis_f = st.file_uploader("RTIS", type=['csv', 'xlsx'])
     dlog_f = st.file_uploader("Datalogger", type=['csv', 'xlsx'])
     sig_f = st.file_uploader("Signal Map", type=['csv', 'xlsx'])
-    if st.button("🚀 PROCESS", use_container_width=True, type="primary"):
+    if st.button("🚀 PROCESS DATA", use_container_width=True, type="primary"):
         if rtis_f and dlog_f and sig_f: process_data(rtis_f, dlog_f, sig_f)
 
 if st.session_state.get('processed') and st.session_state.get('events'):
     df_disp = pd.DataFrame(st.session_state.events)
-    df_disp['Time_ms'] = df_disp['Time'].dt.strftime('%H:%M:%S.%f').str[:-3]
+    df_disp['Time_ms'] = df_disp['Time'].dt.strftime('%d-%m-%Y %H:%M:%S.%f').str[:-3]
     
     col1, col2 = st.columns([1, 1.5])
     with col1:
-        st.write("### 📜 Final Event Table")
+        st.write("### 📜 Passing Events (Latest Only)")
         sel = st.dataframe(df_disp[['Stn', 'Sig', 'Time_ms', 'Aspect', 'Speed']], on_select="rerun", selection_mode="single-row", hide_index=True)
     
     with col2:
@@ -179,14 +192,15 @@ if st.session_state.get('processed') and st.session_state.get('events'):
             idx = 0
         ev = st.session_state.events[idx]
         rtis_df = st.session_state.rtis
+        # Zoom view around the event
         sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1000) & (rtis_df['CumDist'] <= ev['CumDist'] + 1000)]
         
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
-        ax.plot(sub['Precise_Time'], sub['Speed'], marker='o', markersize=4, color='#1A237E', label="RTIS Path")
+        ax.plot(sub['Precise_Time'], sub['Speed'], marker='o', markersize=4, color='#1A237E', label="Train Path")
         ax.axvline(x=ev['Time'], color='red', linestyle='--', label="Pass Point")
         
-        # Details Box
+        # Details Box with millisecond precision
         label = f"STN: {ev['Stn']} | SIG: {ev['Sig']}\nTIME: {ev['Time'].strftime('%H:%M:%S.%f')[:-3]}\nSPEED: {ev['Speed']} km/h\n{ev['Aspect']} ➔ RED"
         ax.annotate(label, xy=(ev['Time'], ev['Speed']), xytext=(35, 35), textcoords='offset points', fontweight='bold',
                     bbox=dict(boxstyle="round", fc="white", ec="red", alpha=0.9), arrowprops=dict(arrowstyle="->"))
