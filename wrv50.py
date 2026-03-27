@@ -6,27 +6,22 @@ import zipfile
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_agg import FigureCanvasAgg
 import matplotlib.dates as mdates
 
 # =========================================================
-#         STREAMLIT PAGE SETUP - V44.8 (PRIORITY)
+#         STREAMLIT PAGE SETUP - V45.5 (STABLE)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
 SAFFRON = "#33D4FC"
-BG_MAP = {
-    "Green": "#0D860D",
-    "Yellow": "#EEF153",
-    "Double Yellow": "#EFA627",
-    "Red": "#F2F2F2"
-}
+BG_MAP = {"Green": "#0D860D", "Yellow": "#EEF153", "Double Yellow": "#EFA627", "Red": "#F2F2F2"}
+ASPECT_PRIORITY = {"Double Yellow": 3, "Yellow": 2, "Green": 1, "Red": 0}
 
 st.markdown(f"""
     <style>
     .top-header {{ background-color: {SAFFRON}; padding: 15px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px; }}
     </style>
-    <div class="top-header"><h1 style='margin:0;'>🚄 Loco-Speed Safety Audit (Priority Mode)</h1></div>
+    <div class="top-header"><h1 style='margin:0;'>🚄 Loco-Speed Safety Audit (Precision Mode)</h1></div>
 """, unsafe_allow_html=True)
 
 if 'events' not in st.session_state: st.session_state.events = []
@@ -51,30 +46,31 @@ def relay_type(name):
     if any(x in name for x in ['RECR', 'RGCR']): return 'Red'
     return None
 
-# Priority for simultaneous events (Higher is better)
-ASPECT_PRIORITY = {
-    "Double Yellow": 3,
-    "Yellow": 2,
-    "Green": 1,
-    "Red": 0
-}
-
-@st.cache_data(show_spinner=False)
-def load_file(file_name, file_bytes):
-    file_obj = io.BytesIO(file_bytes)
-    if file_name.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(file_obj, engine='openpyxl')
-    else:
-        try: return pd.read_csv(file_obj, engine='pyarrow')
-        except:
-            file_obj.seek(0)
-            return pd.read_csv(file_obj, encoding='latin1', on_bad_lines='skip', low_memory=False)
+# =========================================================
+#             FIXED SPEED VALIDATION LOGIC
+# =========================================================
+def get_nearest_rtis_speed(target_time, rtis_df):
+    """
+    Finds the speed from the nearest recorded RTIS second.
+    Handles multiple events per minute by finding the minimum absolute time difference.
+    """
+    if rtis_df.empty:
+        return 0.0
+    
+    # Calculate absolute time difference between Datalogger time and all RTIS entries
+    time_diffs = (rtis_df['Logging Time'] - target_time).abs()
+    nearest_idx = time_diffs.idxmin()
+    
+    # Validation: Nearest RTIS point must be within 5 seconds to be considered valid
+    if time_diffs[nearest_idx].total_seconds() <= 5:
+        return rtis_df.loc[nearest_idx, 'Speed']
+    return 0.0
 
 # =========================================================
 #                      CORE PROCESSING
 # =========================================================
 def process_data(rtis_up, dlog_up, sig_up):
-    with st.spinner("⏳ Processing with Priority Logic (HHECR > HECR)..."):
+    with st.spinner("⏳ Analyzing speed at nearest second and filtering duplicates..."):
         try:
             sig_map = load_file(sig_up.name, sig_up.getvalue())
             up_signals = {clean_id(s) for s in sig_map.iloc[:, 6].dropna().astype(str) if clean_id(s)}
@@ -87,26 +83,21 @@ def process_data(rtis_up, dlog_up, sig_up):
             rtis['BASE_STN'] = rtis['STATION NAME'].astype(str).apply(base_station)
             st.session_state.rtis = rtis
 
-            dlog = load_file(dlog_f.name, dlog_f.getvalue())
+            dlog = load_file(dlog_up.name, dlog_up.getvalue())
             dlog.columns = dlog.columns.str.strip()
             dlog = dlog.rename(columns={'STATION NAME': 'STATION_NAME', 'SIGNAL NAME': 'SIGNAL_NAME', 'SIGNAL STATUS': 'SIGNAL_STATUS', 'SIGNAL TIME': 'SIGNAL_TIME'})
             
             time_series = dlog['SIGNAL_TIME'].astype(str).str.replace(r':(\d{3})$', r'.\1', regex=True)
             dlog['dt'] = pd.to_datetime(time_series, format='mixed', dayfirst=True, errors='coerce')
             
-            # 1. PRIORITY SORTING:
-            # - First by Time (dt)
-            # - Then by Status (DOWN/DROP events must come BEFORE UP events for same timestamp)
-            # - Then by Aspect Priority (Double Yellow before Yellow)
             dlog['rtype'] = dlog['SIGNAL_NAME'].apply(relay_type)
             dlog['status_val'] = dlog['SIGNAL_STATUS'].apply(lambda x: 0 if any(y in str(x).upper() for y in ['DOWN', 'OFF', 'DROP']) else 1)
             dlog['prio_val'] = dlog['rtype'].map(ASPECT_PRIORITY).fillna(0)
             
-            # Sorting logic: dt (ASC), status_val (ASC - Down first), prio_val (DESC - Double Yellow first)
+            # Sort: Priority given to DOWN events so simultaneous state is captured correctly
             dlog = dlog.dropna(subset=['dt']).sort_values(by=['dt', 'status_val', 'prio_val'], ascending=[True, True, False])
 
             latch_aspect = collections.defaultdict(lambda: "Red")
-            # Store multiple candidate aspects for simultaneous drops
             simult_drops = collections.defaultdict(list) 
             raw_events = []
 
@@ -120,57 +111,61 @@ def process_data(rtis_up, dlog_up, sig_up):
 
                 if row.rtype == 'Red' and is_up:
                     ev_time = row.dt
-                    # Start with latched aspect
-                    final_asp = latch_aspect[key]
+                    stn_rtis = rtis[rtis['BASE_STN'] == stn]
                     
-                    # Check simultaneous drops from the last 5 seconds (or exact same time)
-                    if key in simult_drops:
-                        # Filter drops that happened at or before this Red Up event
-                        valid_drops = [d for d in simult_drops[key] if 0 <= (ev_time - d['time']).total_seconds() <= 5]
-                        if valid_drops:
-                            # Select drop with highest priority (Double Yellow > Yellow > Green)
-                            best_drop = max(valid_drops, key=lambda x: ASPECT_PRIORITY.get(x['asp'], 0))
-                            final_asp = best_drop['asp']
+                    # USE FIXED SPEED LOGIC
+                    precise_speed = get_nearest_rtis_speed(ev_time, stn_rtis)
                     
-                    # Sync with RTIS Speed
-                    diffs = (rtis['Logging Time'] - ev_time).abs()
-                    idx = diffs.idxmin()
-                    pt = rtis.loc[idx]
-                    
-                    if pt['Speed'] > 1 and diffs[idx].total_seconds() <= 15 and pt['BASE_STN'] == stn:
+                    if precise_speed > 1:
+                        final_asp = latch_aspect[key]
+                        if key in simult_drops:
+                            valid_drops = [d for d in simult_drops[key] if 0 <= (ev_time - d['time']).total_seconds() <= 5]
+                            if valid_drops:
+                                final_asp = max(valid_drops, key=lambda x: ASPECT_PRIORITY.get(x['asp'], 0))['asp']
+                        
+                        idx_closest = (rtis['Logging Time'] - ev_time).abs().idxmin()
                         raw_events.append({
                             'Stn': stn, 'Sig': sig, 'Time': ev_time,
-                            'Aspect': final_asp, 'Speed': pt['Speed'],
-                            'CumDist': pt['CumDist'], 'RTIS_Stn': pt['BASE_STN']
+                            'Aspect': final_asp, 'Speed': precise_speed,
+                            'CumDist': rtis.loc[idx_closest, 'CumDist'], 'RTIS_Stn': stn
                         })
                     latch_aspect[key] = "Red"
-                    simult_drops[key] = [] # Clear after Red
+                    simult_drops[key] = [] 
                 
                 elif row.rtype in ['Green', 'Double Yellow', 'Yellow']:
-                    if is_up: 
-                        latch_aspect[key] = row.rtype
-                    else: 
-                        # Save the drop event for priority checking
-                        simult_drops[key].append({'asp': row.rtype, 'time': row.dt})
+                    if is_up: latch_aspect[key] = row.rtype
+                    else: simult_drops[key].append({'asp': row.rtype, 'time': row.dt})
 
-            # Duplicate filter (15s)
+            # ---------------------------------------------------------
+            # DEDUPLICATION: Group by Signal and Station, keep only the LAST event
+            # ---------------------------------------------------------
             final_events = []
             if raw_events:
-                df_ev = pd.DataFrame(raw_events).sort_values(['Stn', 'Sig', 'Time'])
-                for _, grp in df_ev.groupby(['Stn', 'Sig']):
-                    dt_check = grp['Time'].diff().shift(-1).dt.total_seconds()
-                    valid = grp[dt_check.isna() | (dt_check > 15)]
-                    final_events.extend(valid.to_dict('records'))
+                df_res = pd.DataFrame(raw_events).sort_values(['Stn', 'Sig', 'Time'])
+                # Grouping by Stn and Sig, taking the last entry ensures only the final pass is recorded
+                deduped_df = df_res.groupby(['Stn', 'Sig'], as_index=False).last()
+                final_events = deduped_df.to_dict('records')
 
             st.session_state.events = sorted(final_events, key=lambda x: x['Time'])
             st.session_state.processed = True
-            st.success(f"✅ Processed {len(st.session_state.events)} events with Priority Logic.")
+            st.success(f"✅ Processed successfully. Found {len(st.session_state.events)} unique passing events.")
         except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
+            st.error(f"❌ Error during processing: {str(e)}")
 
 # =========================================================
-#                     EXPORT & UI
+#           EXPORT & UI (Remain unchanged)
 # =========================================================
+@st.cache_data(show_spinner=False)
+def load_file(file_name, file_bytes):
+    file_obj = io.BytesIO(file_bytes)
+    if file_name.endswith(('.xlsx', '.xls')):
+        return pd.read_excel(file_obj, engine='openpyxl')
+    else:
+        try: return pd.read_csv(file_obj, engine='pyarrow')
+        except:
+            file_obj.seek(0)
+            return pd.read_csv(file_obj, encoding='latin1', on_bad_lines='skip', low_memory=False)
+
 def generate_excel(data):
     output = io.BytesIO()
     export_df = pd.DataFrame([{
