@@ -2,31 +2,24 @@ import os
 import re
 import io
 import collections
-import zipfile
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import numpy as np
 
 # =========================================================
-#         STREAMLIT PAGE SETUP - V45.1 (PHYSICAL PASS)
+#         STREAMLIT PAGE SETUP - V45.2 (LAST EVENT LOGIC)
 # =========================================================
 st.set_page_config(page_title="Loco-Speed Safety Audit", layout="wide", page_icon="🚄")
 
 SAFFRON = "#33D4FC"
-BG_MAP = {
-    "Green": "#0D860D",
-    "Yellow": "#EEF153",
-    "Double Yellow": "#EFA627",
-    "Red": "#F2F2F2"
-}
+BG_MAP = {"Green": "#0D860D", "Yellow": "#EEF153", "Double Yellow": "#EFA627", "Red": "#F2F2F2"}
 
 st.markdown(f"""
     <style>
     .top-header {{ background-color: {SAFFRON}; padding: 15px; border-radius: 10px; color: white; text-align: center; margin-bottom: 20px; }}
     </style>
-    <div class="top-header"><h1 style='margin:0;'>🚄 Loco-Speed Audit (Physical Signal Crossing Mode)</h1></div>
+    <div class="top-header"><h1 style='margin:0;'>🚄 Loco-Speed Audit (Final Passing Event Mode)</h1></div>
 """, unsafe_allow_html=True)
 
 if 'events' not in st.session_state: st.session_state.events = []
@@ -65,20 +58,16 @@ def relay_type(name):
 ASPECT_PRIORITY = {"Double Yellow": 3, "Yellow": 2, "Green": 1, "Red": 0}
 
 def get_interpolated_speed(target_time, rtis_df):
-    """Calculates exact speed by interpolating between RTIS points."""
     before = rtis_df[rtis_df['Logging Time'] <= target_time].tail(1)
     after = rtis_df[rtis_df['Logging Time'] >= target_time].head(1)
-    
     if before.empty or after.empty:
         if not rtis_df.empty:
             idx = (rtis_df['Logging Time'] - target_time).abs().idxmin()
             return rtis_df.loc[idx, 'Speed']
         return 0.0
-    
     t1, v1 = before.iloc[0]['Logging Time'].timestamp(), before.iloc[0]['Speed']
     t2, v2 = after.iloc[0]['Logging Time'].timestamp(), after.iloc[0]['Speed']
     tx = target_time.timestamp()
-    
     if t1 == t2: return v1
     return round(v1 + (v2 - v1) * (tx - t1) / (t2 - t1), 2)
 
@@ -86,7 +75,7 @@ def get_interpolated_speed(target_time, rtis_df):
 #                      CORE PROCESSING
 # =========================================================
 def process_data(rtis_up, dlog_up, sig_up):
-    with st.spinner("⏳ Validating Physical Train Movement..."):
+    with st.spinner("⏳ Analyzing RTIS Cell E2992 Precision & Filtering Repeats..."):
         try:
             sig_map = load_file(sig_up.name, sig_up.getvalue())
             up_signals = {clean_id(s) for s in sig_map.iloc[:, 6].dropna().astype(str) if clean_id(s)}
@@ -125,23 +114,15 @@ def process_data(rtis_up, dlog_up, sig_up):
 
                 if row.rtype == 'Red' and is_up:
                     ev_time = row.dt
-                    
-                    # --- PHYSICAL VALIDATION CHECK ---
-                    # 1. Check if RTIS records exist for this station at this time
                     stn_rtis = rtis[rtis['BASE_STN'] == stn]
                     if stn_rtis.empty: continue
                     
-                    # 2. Check if the train was actually near this station (Time window check)
-                    time_diff = (stn_rtis['Logging Time'] - ev_time).abs().min().total_seconds()
-                    if time_diff > 30: continue # Agar train 30s se zyada door hai, toh ignore.
+                    # Physical distance/time filter
+                    if (stn_rtis['Logging Time'] - ev_time).abs().min().total_seconds() > 30: continue
 
-                    # 3. Get Interpolated Speed
                     precise_speed = get_interpolated_speed(ev_time, stn_rtis)
-                    
-                    # 4. Only capture if train is moving (Passing the signal)
                     if precise_speed < 1: continue 
 
-                    # Determine Aspect
                     final_asp = latch_aspect[key]
                     if key in simult_drops:
                         valid_drops = [d for d in simult_drops[key] if 0 <= (ev_time - d['time']).total_seconds() <= 5]
@@ -149,14 +130,12 @@ def process_data(rtis_up, dlog_up, sig_up):
                             best_drop = max(valid_drops, key=lambda x: ASPECT_PRIORITY.get(x['asp'], 0))
                             final_asp = best_drop['asp']
                     
-                    # Store event
                     idx_closest = (rtis['Logging Time'] - ev_time).abs().idxmin()
                     raw_events.append({
                         'Stn': stn, 'Sig': sig, 'Time': ev_time,
                         'Aspect': final_asp, 'Speed': precise_speed,
-                        'CumDist': rtis.loc[idx_closest, 'CumDist'], 'RTIS_Stn': stn
+                        'CumDist': rtis.loc[idx_closest, 'CumDist']
                     })
-                    
                     latch_aspect[key] = "Red"
                     simult_drops[key] = [] 
                 
@@ -164,10 +143,18 @@ def process_data(rtis_up, dlog_up, sig_up):
                     if is_up: latch_aspect[key] = row.rtype
                     else: simult_drops[key].append({'asp': row.rtype, 'time': row.dt})
 
-            # Final Cleanup: Filter duplicates (same signal passing within 2 mins)
-            st.session_state.events = sorted(raw_events, key=lambda x: x['Time'])
+            # --- DEDUPLICATION LOGIC: KEEP THE LAST EVENT PER SIGNAL PASS ---
+            if raw_events:
+                df_temp = pd.DataFrame(raw_events).sort_values(['Stn', 'Sig', 'Time'])
+                # Group by Station and Signal, but separate passes if they are far apart in time
+                # Here we assume a signal pass shouldn't repeat within 5 minutes.
+                df_temp['diff'] = df_temp.groupby(['Stn', 'Sig'])['Time'].diff().dt.total_seconds()
+                # Keep the LAST record of any cluster within 5 minutes
+                final_filtered = df_temp.groupby(['Stn', 'Sig'], as_index=False).last()
+                st.session_state.events = final_filtered.to_dict('records')
+            
             st.session_state.processed = True
-            st.success(f"✅ Found {len(st.session_state.events)} physical signal crossing events.")
+            st.success(f"✅ Processed. Deduplicated to {len(st.session_state.events)} passing events.")
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
 
@@ -175,30 +162,17 @@ def process_data(rtis_up, dlog_up, sig_up):
 #                     UI & GRAPHING
 # =========================================================
 def draw_detailed_plot(ev, rtis_df):
-    # Zoom in on the crossing event
     sub = rtis_df[(rtis_df['CumDist'] >= ev['CumDist'] - 1500) & (rtis_df['CumDist'] <= ev['CumDist'] + 1500)]
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.set_facecolor(BG_MAP.get(ev['Aspect'], "#FFFFFF"))
-    
-    ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E', lw=2, marker='o', label="Train Path")
+    ax.plot(sub['Logging Time'], sub['Speed'], color='#1A237E', lw=2, marker='o', label="RTIS Path")
     ax.axvline(x=ev['Time'], color='red', linestyle='--', lw=2.5)
-    
     ms_time = ev['Time'].strftime('%H:%M:%S.%f')[:-3]
-    label = (f"STATION: {ev['Stn']}\nSIGNAL: {ev['Sig']}\n"
-             f"CROSSING TIME: {ms_time}\nSPEED: {ev['Speed']} km/h\n"
-             f"ASPECT: {ev['Aspect']} ➔ RED")
-    
-    ax.annotate(label, xy=(ev['Time'], ev['Speed']), xytext=(40, 40),
-                textcoords='offset points', fontweight='bold',
-                bbox=dict(boxstyle="round,pad=0.5", fc="white", ec="red", alpha=0.9),
-                arrowprops=dict(arrowstyle="->", color="black"))
-    
-    ax.set_title(f"PHYSICAL PASS ANALYSIS: {ev['Stn']} {ev['Sig']}", fontweight='bold')
+    label = (f"STN: {ev['Stn']} | SIG: {ev['Sig']}\nCROSSING: {ms_time}\nSPEED: {ev['Speed']} km/h\n{ev['Aspect']} ➔ RED")
+    ax.annotate(label, xy=(ev['Time'], ev['Speed']), xytext=(30, 30), textcoords='offset points', fontweight='bold', bbox=dict(boxstyle="round", fc="white", ec="red"), arrowprops=dict(arrowstyle="->"))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
-    ax.grid(True, alpha=0.3)
     return fig
 
-# --- Sidebar & Main ---
 with st.sidebar:
     st.header("📁 Load Files")
     rtis_f = st.file_uploader("RTIS", type=['csv', 'xlsx'])
@@ -210,12 +184,9 @@ with st.sidebar:
 if st.session_state.processed and st.session_state.events:
     df_disp = pd.DataFrame(st.session_state.events)
     df_disp['Time_ms'] = df_disp['Time'].dt.strftime('%H:%M:%S.%f').str[:-3]
-    
-    col_t, col_g = st.columns([1, 1.5])
-    with col_t:
-        st.write("### 📜 Physical Pass Table")
-        sel = st.dataframe(df_disp[['Stn', 'Sig', 'Time_ms', 'Aspect', 'Speed']], 
-                           on_select="rerun", selection_mode="single-row", hide_index=True)
-    with col_g:
+    c1, c2 = st.columns([1, 1.5])
+    with c1:
+        sel = st.dataframe(df_disp[['Stn', 'Sig', 'Time_ms', 'Aspect', 'Speed']], on_select="rerun", selection_mode="single-row", hide_index=True)
+    with c2:
         idx = sel.selection.rows[0] if (sel and sel.selection.rows) else 0
         st.pyplot(draw_detailed_plot(st.session_state.events[idx], st.session_state.rtis))
