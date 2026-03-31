@@ -50,9 +50,9 @@ def base_station(s):
 
 def relay_type(name):
     name = str(name).upper()
-    if any(x in name for x in ['DECR','DECPR_K','DECPR','G','DGCR']): return 'Green'
-    if any(x in name for x in ['HHECR','HHECPR2_K','HH_H_ECR','HHGCR']): return 'Double Yellow'
-    if any(x in name for x in ['HECR', 'HGCR']): return 'Yellow'
+    if any(x in name for x in ['DECR','DECPR_K','DECPR','GP1R3','DGCR']): return 'Green'
+    if any(x in name for x in ['HHECR','HHECPR2_K','HH_H_ECR','GP1R4','HHGCR']): return 'Double Yellow'
+    if any(x in name for x in ['HECR','GP1R2','HGCR']): return 'Yellow'
     if any(x in name for x in ['RECR', 'RGCR']): return 'Red'
     return None
 
