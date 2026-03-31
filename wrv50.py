@@ -18,7 +18,7 @@ if 'rtis' not in st.session_state: st.session_state.rtis = None
 
 SAFFRON = "#33D4FC"
 BG_MAP = {"Green": "#0D860D", "Yellow": "#EEF153", "Double Yellow": "#EFA627", "Red": "#F2F2F2"}
-ASPECT_PRIORITY = {"Green": 1, "Double Yellow": 3, "Yellow": 2,  "Red": 0}
+ASPECT_PRIORITY = {"Green": 1, "Double Yellow": 2, "Yellow": 3,  "Red": 0}
 
 st.markdown(f"""
     <style>
